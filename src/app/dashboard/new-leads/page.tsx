@@ -272,12 +272,17 @@ export default function NewLeadsPage() {
         } else {
           // Standard search without a saved custom area
           if (trimmedCityFilter) {
-            queryBuilder = queryBuilder.ilike('reg_address_post_town', `%${trimmedCityFilter}%`);
+            // queryBuilder = queryBuilder.ilike('reg_address_post_town', `%${trimmedCityFilter}%`); // Temporarily comment out for testing
           }
           queryBuilder = queryBuilder.range(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE - 1);
           
+          // console.log("Supabase query object (debug):", queryBuilder); // .toString() might not be helpful, let's see raw object or rely on network tab for URL
+
           const { data, error: dbError, count } = await queryBuilder;
-          if (dbError) throw dbError;
+          if (dbError) {
+            console.error("Supabase dbError object (debug):", dbError); // Log the specific Supabase error
+            throw dbError;
+          }
           if (data) {
             potentialLeads = data.filter(company => !clientCompanyNumbers.has(company.company_number));
           }
@@ -288,8 +293,12 @@ export default function NewLeadsPage() {
         setLeadCompanies(potentialLeads.slice(0, ITEMS_PER_PAGE)); 
         setTotalLeads(totalPotentialLeads);
       } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : String(e);
-      setError("Failed to load leads. " + errorMessage);
+        console.error("Caught error in fetchListData (Vercel debug):", e);
+        if (e && typeof e === 'object') {
+          console.error("Error properties (Vercel debug):", Object.keys(e).reduce((acc, key) => { acc[key] = (e as any)[key]; return acc; }, {} as Record<string, any>));
+        }
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        setError("Failed to load leads. " + errorMessage);
       } finally {
         setLoading(false);
       }
