@@ -294,8 +294,14 @@ export default function NewLeadsPage() {
         setTotalLeads(totalPotentialLeads);
       } catch (e: unknown) {
         console.error("Caught error in fetchListData (Vercel debug):", e);
-        if (e && typeof e === 'object') {
-          console.error("Error properties (Vercel debug):", Object.keys(e).reduce((acc, key) => { acc[key] = (e as any)[key]; return acc; }, {} as Record<string, any>));
+        if (e && typeof e === 'object' && e !== null) {
+          console.error(
+            "Error properties (Vercel debug):",
+            Object.keys(e).reduce((acc, key) => {
+              acc[key] = (e as Record<string, unknown>)[key];
+              return acc;
+            }, {} as Record<string, unknown>)
+          );
         }
         const errorMessage = e instanceof Error ? e.message : String(e);
         setError("Failed to load leads. " + errorMessage);
@@ -354,7 +360,21 @@ export default function NewLeadsPage() {
     } else if (activeTab === 'Custom Save') {
       if(loading) setLoading(false);
     }
-  }, [activeTab, startDate, endDate, cityFilter, clientCompanyNumbers, selectedSavedSearchId, fetchListData, leadCompanies.length, loading]);
+  }, [
+    activeTab, 
+    startDate, 
+    endDate, 
+    cityFilter, 
+    clientCompanyNumbers, 
+    selectedSavedSearchId, 
+    fetchListData, 
+    leadCompanies.length, 
+    loading,
+    specificAccountsDueStartDate,
+    specificAccountsDueEndDate,
+    specificConfirmationStatementStartDate,
+    specificConfirmationStatementEndDate
+  ]);
 
   useEffect(() => {
     if (activeTab === 'List' && selectedSavedSearchId) {
