@@ -132,9 +132,10 @@ export default function SharePage() {
           console.log(`Successfully uploaded ${file.name} to ${filePath}`);
           uploadedFilePaths.push(filePath); // Add successful path
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error(`Critical error during upload attempt for ${file.name}:`, e);
-        setError(`Failed to upload ${file.name}. A critical error occurred: ${e.message || 'Unknown critical error'}. Please try again.`);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        setError(`Failed to upload ${file.name}. A critical error occurred: ${errorMessage || 'Unknown critical error'}. Please try again.`);
         allUploadsSuccessful = false;
         break;
       }

@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/scheduler/run-alert-analyzer",
-      "schedule": "0 8 * * *" // Runs at 8:00 AM UTC every day
+      "schedule": "0 8 * * *"
     }
   ]
 } 

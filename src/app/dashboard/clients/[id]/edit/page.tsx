@@ -123,7 +123,8 @@ const initialFormData: FormData = {
 
 export default function EditClientPage() {
   const router = useRouter();
-  const { id } = useParams(); // This will be the client ID string
+  const params = useParams(); // Get params object
+  const id = params && typeof params.id === 'string' ? params.id : undefined; // Safely get id, checking for null params
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
@@ -200,7 +201,8 @@ export default function EditClientPage() {
         };
         setClient(clientData);
         // Set form data, excluding fields not in FormData type
-        const { id: clientId, recentFiles, meetingLog, emailHistory, shareableLinkToken, ...formDataFromClient } = clientData;
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { id: _clientId, recentFiles: _recentFiles, meetingLog: _meetingLog, emailHistory: _emailHistory, shareableLinkToken: _shareableLinkToken, ...formDataFromClient } = clientData;
         setFormData(formDataFromClient);
       }
       setLoading(false);
@@ -211,22 +213,21 @@ export default function EditClientPage() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
-    // @ts-ignore
-    const checked = type === 'checkbox' ? e.target.checked : undefined;
+    const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
   
     setFormData((prev) => {
       const keys = name.split('.');
       if (keys.length > 1) {
-        // Handle nested state (e.g., reminderSchedule.vatReminderDays)
-        let nestedState = { ...prev };
-        let currentLevel = nestedState;
+        const nestedState = { ...prev };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let currentLevel: Record<string, any> = nestedState;
         for (let i = 0; i < keys.length - 1; i++) {
-          // @ts-ignore
+          if (typeof currentLevel[keys[i]] !== 'object' || currentLevel[keys[i]] === null) {
+            currentLevel[keys[i]] = {};
+          }
           currentLevel[keys[i]] = { ...currentLevel[keys[i]] };
-          // @ts-ignore
           currentLevel = currentLevel[keys[i]];
         }
-        // @ts-ignore
         currentLevel[keys[keys.length - 1]] = type === 'checkbox' ? checked : (type === 'number' ? parseFloat(value) || 0 : value);
         return nestedState;
       } else {

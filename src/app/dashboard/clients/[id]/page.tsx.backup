@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, FormEvent, useRef } from 'react';
+import { useState, useEffect, FormEvent, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   Building2,
@@ -21,17 +21,16 @@ import {
   Save,
   Trash2 as TrashIcon,
   ArrowRight,
+  ListChecks,
   Sparkles, 
   AlertTriangle, 
   MessageCircleQuestion, 
   SendHorizontal, 
   User as UserIcon,
   Edit3 as EditIcon,
+  X as XIcon,
   Send as SendIcon,
-  RefreshCw,
-  FileCog,
-  Plus,
-  Info,
+  RefreshCw
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,8 +48,8 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-// import ReactMarkdown from 'react-markdown'; 
-// import remarkGfm from 'remark-gfm'; 
+import ReactMarkdown from 'react-markdown'; 
+import remarkGfm from 'remark-gfm'; 
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -62,16 +61,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-// Use relative paths for these imports
-import ClientAlertForm from '../../../../../components/admin/ClientAlertForm'; 
-import { Switch as UISwitch } from '@/components/ui/switch'; // Specific import for ShadCN UI Switch
+import ClientAlertForm from '../../../../../components/admin/ClientAlertForm';
 
 // Helper function to truncate text to a specified number of words
 const truncateText = (text: string | null | undefined, wordLimit: number): string => {
   if (!text) return '';
   
   // First try to get a clean section by removing markdown and other formatting
-  const cleanText = text.replace(/\*\*/g, '')
+  let cleanText = text.replace(/\*\*/g, '')
                      .replace(/\n\n---\n\n/g, ' ')
                      .replace(/\n+/g, ' ')
                      .replace(/\s+/g, ' ');
@@ -213,50 +210,17 @@ const workflowStages = [
   'On Hold / Blocked',
 ];
 
-// Define ReminderSchedule interface matching the one in ClientAlertForm and API
-interface ReminderSchedule {
-  id?: string; // From client_alert_schedules table
-  client_alert_id?: string;
-  days_before_due: number;
-  alert_message?: string | null;
-  is_active?: boolean;
-  use_custom_message?: boolean; // This field is used in ClientAlertForm, ensure it's handled/available if needed for display logic
-  // created_at and updated_at could also be here if fetched from client_alert_schedules
-}
-
 interface YourClientAlertType { 
   id: string; 
   client_id: string; 
   alert_type: string; 
-  days_before_due: number;
-  notification_preference: 'DRAFT_FOR_TEAM' | 'SEND_DIRECT_TO_CLIENT';
+  days_before_due: number; 
+  notification_preference: 'DRAFT_FOR_TEAM' | 'SEND_DIRECT_TO_CLIENT'; // Made specific
   is_active: boolean; 
-  subject?: string | null; // Ensure subject is part of the type
-  body: string; // Use body, as expected by ClientAlertForm
-  source_task_id?: string | null;
+  alert_message: string; 
+  source_task_id?: string | null; // Added to match form type, API also returns this
   clients?: { client_name?: string }; 
-  use_multi_schedule?: boolean;
-  reminder_schedules?: ReminderSchedule[];
 }
-
-// Define RawClientAlert for API response type
-interface RawClientAlert {
-  id: string;
-  client_id: string;
-  alert_type: string;
-  alert_message?: string | null;
-  subject?: string | null;
-  days_before_due: number;
-  is_active: boolean;
-  notification_preference: 'DRAFT_FOR_TEAM' | 'SEND_DIRECT_TO_CLIENT';
-  source_task_id?: string | null;
-  use_multi_schedule?: boolean;
-  reminder_schedules?: ReminderSchedule[];
-  [key: string]: unknown; // Allow other properties
-}
-
-// Type for the values in services form, used in handleServicesChange
-type ServicesFormValue = string[] | 'monthly' | 'quarterly' | 'annually' | 'signed' | 'pending' | 'not_sent';
 
 export default function ClientDetailPage() {
   const router = useRouter();
@@ -322,6 +286,25 @@ export default function ClientDetailPage() {
     preferredContactMethod: 'email'
   });
 
+  // State for inline editing of Company Details
+  const [isEditingCompany, setIsEditingCompany] = useState(false);
+  const [savingCompany, setSavingCompany] = useState(false);
+  const [companyFormData, setCompanyFormData] = useState<{
+    companyName: string;
+    companyNumber: string;
+    companyAddress: string;
+    sicCode: string;
+    companyStatus: 'active' | 'dormant' | 'dissolved';
+    incorporationDate: string;
+  }>({
+    companyName: '',
+    companyNumber: '',
+    companyAddress: '',
+    sicCode: '',
+    companyStatus: 'active',
+    incorporationDate: ''
+  });
+
   const [detailedClientNotes, setDetailedClientNotes] = useState<ClientNote[]>([]);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [addingNote, setAddingNote] = useState(false);
@@ -332,6 +315,7 @@ export default function ClientDetailPage() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [customUserQuestion, setCustomUserQuestion] = useState('');
   const [chatDisplayMessages, setChatDisplayMessages] = useState<ChatMessage[]>([]); 
+  const [aiActionStep, setAiActionStep] = useState<string | null>(null); 
   const typingIntervalRef = useRef<NodeJS.Timeout | null>(null); 
 
   const aiProcessingSteps = [
@@ -354,7 +338,7 @@ export default function ClientDetailPage() {
   const [apiBaseUrl, setApiBaseUrl] = useState('');
 
   // New state for managing alert editing
-  const [editingAlert, setEditingAlert] = useState<YourClientAlertType | null>(null); // Changed any to YourClientAlertType
+  const [editingAlert, setEditingAlert] = useState<any | null>(null); // Using any as a temporary workaround for type compatibility
   const [showEditAlertForm, setShowEditAlertForm] = useState(false);
 
   // New state for testing alerts
@@ -375,16 +359,8 @@ export default function ClientDetailPage() {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to fetch client alerts');
       }
-      const data: RawClientAlert[] = await response.json(); // Use RawClientAlert[]
-      // Map API response (which has alert_message) to form's expected structure (body and subject)
-      const mappedData: YourClientAlertType[] = data.map((alertItem) => ({
-        ...alertItem,
-        body: alertItem.alert_message || '', // Ensure body is always a string
-        subject: alertItem.subject || `Reminder: ${(alertItem.alert_type || '').replace(/_/g, ' ')}`,
-        // Ensure reminder_schedules is an array, even if null/undefined from API
-        reminder_schedules: alertItem.reminder_schedules || [], 
-      }));
-      setClientAlerts(mappedData || []);
+      const data = await response.json();
+      setClientAlerts(data || []);
     } catch (error) {
       console.error("Error fetching client alerts:", error);
       toast.error((error as Error).message || 'Could not load client alerts.');
@@ -444,7 +420,7 @@ export default function ClientDetailPage() {
       if (clientError) throw clientError;
       if (!clientData) throw new Error('Client not found.');
       
-      const existingRecentFiles: ClientFileRecord[] = tryParseJSON(clientData.recent_files) || []; // Changed let to const
+      let existingRecentFiles: ClientFileRecord[] = tryParseJSON(clientData.recent_files) || [];
       
       const storageFiles: ClientFileRecord[] = [];
       const categories: ('bankStatements' | 'receipts' | 'payrollSummaries' | 'other')[] = [
@@ -563,9 +539,9 @@ export default function ClientDetailPage() {
       await fetchClientNotes(clientId);
       await checkBucket();
 
-    } catch (error: unknown) { // Changed any to unknown
+    } catch (error: any) {
       console.error('Error fetching client data:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to fetch client details.'); // Type-safe error message
+      toast.error('Failed to fetch client details.');
       setClient(null);
     } finally {
       setLoading(false);
@@ -574,7 +550,6 @@ export default function ClientDetailPage() {
 
   useEffect(() => {
     fetchClientDataAndRelated();
-    // eslint-disable-next-line react-hooks/exhaustive-deps 
   }, [clientId, refreshFiles]); // Added refreshFiles dependency
 
   useEffect(() => {
@@ -640,9 +615,8 @@ export default function ClientDetailPage() {
     setFormData((prev) => {
       const keys = name.split('.');
       if (keys.length > 1) {
-        const nestedState: FormData = { ...prev }; // Changed let to const, removed 'as any'
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let currentLevel: any = nestedState; // Explicitly make currentLevel any for dynamic access
+        let nestedState = { ...prev } as any;
+        let currentLevel = nestedState;
         for (let i = 0; i < keys.length - 1; i++) {
           currentLevel[keys[i]] = { ...(currentLevel[keys[i]] || {}) };
           currentLevel = currentLevel[keys[i]];
@@ -732,11 +706,9 @@ export default function ClientDetailPage() {
     }
   };
 
-  function tryParseJSON(inputValue: unknown): ClientFileRecord[] { // Changed any to unknown
+  function tryParseJSON(inputValue: any): ClientFileRecord[] {
     console.log('Attempting to process recent_files from DB. Input type:', typeof inputValue, 'Value:', inputValue);
     if (Array.isArray(inputValue)) {
-      // If it's already an array, assume it's in the correct format or needs to be validated.
-      // For now, let's cast. Consider adding validation if needed.
       return inputValue as ClientFileRecord[];
     }
     if (typeof inputValue === 'string' && inputValue.trim()) {
@@ -757,10 +729,62 @@ export default function ClientDetailPage() {
     return [];
   }
 
+  const handleEditClient = () => {
+    if (client) {
+      const { 
+        id: _id, 
+        recentFiles: _recentFiles, 
+        meetingLog: _meetingLog, 
+        emailHistory: _emailHistory, 
+        shareableLinkToken: _shareableLinkToken, 
+        // Ensure ai_document_status, ai_document_notes, last_ai_analysis_at are handled if they exist on client but not FormData
+        ai_document_status: _ai_document_status,
+        ai_document_notes: _ai_document_notes,
+        last_ai_analysis_at: _last_ai_analysis_at,
+        ...editableClientData 
+      } = client;
+      const populatedFormData: FormData = {
+        clientName: editableClientData.clientName || '',
+        clientEmail: editableClientData.clientEmail || '',
+        clientPhone: editableClientData.clientPhone || '',
+        clientRole: editableClientData.clientRole || '',
+        preferredContactMethod: editableClientData.preferredContactMethod || 'email',
+        companyName: editableClientData.companyName || '',
+        companyNumber: editableClientData.companyNumber || '',
+        companyAddress: editableClientData.companyAddress || '',
+        sicCode: editableClientData.sicCode || '',
+        companyStatus: editableClientData.companyStatus || 'active',
+        incorporationDate: editableClientData.incorporationDate || '',
+        yearEndDate: editableClientData.yearEndDate || '',
+        nextAccountsDue: editableClientData.nextAccountsDue || '',
+        nextConfirmationStatementDue: editableClientData.nextConfirmationStatementDue || '',
+        vatFilingFrequency: editableClientData.vatFilingFrequency || 'quarterly',
+        nextVatDue: editableClientData.nextVatDue || '',
+        payrollDeadlines: editableClientData.payrollDeadlines || [],
+        corporationTaxDeadline: editableClientData.corporationTaxDeadline || '',
+        services: editableClientData.services || [],
+        engagementLetterStatus: editableClientData.engagementLetterStatus || 'not_sent',
+        requiredDocuments: editableClientData.requiredDocuments || { bankStatements: false, receipts: false, payrollSummaries: false },
+        taskStatus: editableClientData.taskStatus || 'waiting',
+        lastInteractionNotes: editableClientData.lastInteractionNotes || '',
+        reminderSchedule: editableClientData.reminderSchedule || { vatReminderDays: 30, accountsReminderDays: 30, confirmationStatementReminderDays: 30 },
+        customAlerts: editableClientData.customAlerts || { missedReminders: false, documentOverdue: false },
+        automatedEmails: editableClientData.automatedEmails === undefined ? true : editableClientData.automatedEmails, 
+        lastYearTurnover: editableClientData.lastYearTurnover || 0,
+        profitLoss: editableClientData.profitLoss || 0,
+        taxOwed: editableClientData.taxOwed || 0,
+        notes: editableClientData.notes || '',
+      };
+      setFormData(populatedFormData);
+      setIsEditing(true);
+    } else {
+      toast.error("Cannot edit: Client data not loaded.");
+    }
+  };
+  
   const handleCancelEdit = () => {
     setIsEditing(false);
     if (client) { 
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { id: _id, recentFiles: _recentFiles, meetingLog: _meetingLog, emailHistory: _emailHistory, shareableLinkToken: _shareableLinkToken, ...currentClientData } = client;
         const resetFormData: FormData = {
             clientName: currentClientData.clientName || '',
@@ -820,9 +844,9 @@ export default function ClientDetailPage() {
         
         toast.success('Client deleted successfully!');
         router.push('/dashboard/clients'); 
-      } catch (error: unknown) { // Changed any to unknown
+      } catch (error: any) {
         console.error('Error deleting client:', error);
-        toast.error('Error deleting client: ' + (error instanceof Error ? error.message : String(error))); // Safe message access
+        toast.error('Error deleting client: ' + error.message);
       }
     }
   };
@@ -872,9 +896,9 @@ export default function ClientDetailPage() {
        else {
         toast.info('Shareable link processed.'); 
       }
-    } catch (error: unknown) { // Changed any to unknown
+    } catch (error: any) {
       console.error('Error creating/updating shareable link:', error);
-      toast.error(`Failed to process shareable link: ${(error instanceof Error ? error.message : String(error))}`); // Safe message access
+      toast.error(`Failed to process shareable link: ${error.message}`);
     }
   };
 
@@ -942,7 +966,7 @@ export default function ClientDetailPage() {
     if (!dateString) return 'N/A';
     try {
       return new Date(dateString).toLocaleDateString();
-    } catch { // Removed unused error variable
+    } catch (error) {
       return 'Invalid date';
     }
   };
@@ -1015,10 +1039,10 @@ export default function ClientDetailPage() {
         .eq('id', taskId);
       if (updateError) throw updateError;
       toast.success(`Task moved to: ${nextStage}`);
-    } catch (err: unknown) { // Changed any to unknown
+    } catch (err: any) {
       console.error('Failed to update task stage:', err);
       setClientTasks(prevTasks => prevTasks.map(task => task.id === taskId ? { ...task, stage: originalStage } : task));
-      toast.error('Failed to move task. Please try again. Error: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error('Failed to move task. Please try again.');
     }
   };
 
@@ -1034,9 +1058,9 @@ export default function ClientDetailPage() {
       if (deleteError) throw deleteError;
       setClientTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
       toast.success('Task cleared successfully.');
-    } catch (err: unknown) { // Changed any to unknown
+    } catch (err: any) {
       console.error('Failed to delete task:', err);
-      toast.error('Failed to clear task. Ensure RLS allows delete. Error: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error('Failed to clear task. Ensure RLS allows delete.');
     }
   };
   
@@ -1057,10 +1081,12 @@ export default function ClientDetailPage() {
     setIsAnalyzing(true);
     setAnalysisError(null);
     let stepIndex = 0;
+    setAiActionStep(aiProcessingSteps[stepIndex]);
     if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
     typingIntervalRef.current = setInterval(() => {
       stepIndex++;
       if (stepIndex < aiProcessingSteps.length) {
+        setAiActionStep(aiProcessingSteps[stepIndex]);
       } 
     }, 2500); 
 
@@ -1096,9 +1122,9 @@ export default function ClientDetailPage() {
         };
       });
 
-    } catch (e: unknown) { // Changed any to unknown
+    } catch (e: any) {
       console.error('Error during full AI analysis:', e);
-      const errorMsg = (e instanceof Error ? e.message : String(e)) || 'An unexpected error occurred during full analysis.';
+      const errorMsg = e.message || 'An unexpected error occurred during full analysis.';
       setAnalysisError(errorMsg);
       toast.error(`Full AI analysis failed: ${errorMsg}`);
     } finally {
@@ -1128,10 +1154,12 @@ export default function ClientDetailPage() {
     setAnalysisError(null);
     let stepIndex = 0;
     const questionSteps = ["Thinking...", "Searching documents for relevant information...", "Formulating answer..."];
+    setAiActionStep(questionSteps[stepIndex]);
     if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
     typingIntervalRef.current = setInterval(() => {
       stepIndex++;
       if (stepIndex < questionSteps.length) {
+        setAiActionStep(questionSteps[stepIndex]);
       } 
     }, 2000);
 
@@ -1167,9 +1195,9 @@ export default function ClientDetailPage() {
       });
       setCustomUserQuestion(''); 
 
-    } catch (e: unknown) { // Changed any to unknown
+    } catch (e: any) {
       console.error('Error during custom AI question:', e);
-      const errorMsg = (e instanceof Error ? e.message : String(e)) || 'An unexpected error occurred while asking the question.';
+      const errorMsg = e.message || 'An unexpected error occurred while asking the question.';
       setAnalysisError(errorMsg);
       toast.error(`Failed to get answer: ${errorMsg}`);
     } finally {
@@ -1287,6 +1315,12 @@ export default function ClientDetailPage() {
     }
   };
 
+  const handleCancelAlertForm = () => {
+    setShowCreateAlertForm(false);
+    setShowEditAlertForm(false);
+    setEditingAlert(null);
+  };
+
   // Add a function to test an alert
   const handleTestAlert = async (alertId: string) => {
     if (testingAlertId === alertId) return; // Already testing this alert
@@ -1294,11 +1328,11 @@ export default function ClientDetailPage() {
     try {
       setTestingAlertId(alertId);
       
+      // Get the current user's email from Supabase auth
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (userError || !user?.email) {
         toast.error("Unable to get your email address. Please ensure you're logged in.");
-        setTestingAlertId(null); // Reset testing state
         return;
       }
 
@@ -1311,27 +1345,16 @@ export default function ClientDetailPage() {
         }),
       });
 
-      // No early throw, let's parse JSON for all responses
-      const result = await response.json(); 
-
       if (!response.ok) {
-        // For non-ok responses, result.error or result.message should contain the error info from the API
-        throw new Error(result.error || result.message || `Failed to test alert sequence. Status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to test alert. Status: ${response.status}`);
       }
 
-      // Handle successful responses (200 and 207)
-      if (response.status === 207) { // HTTP 207 Multi-Status, indicates partial success
-        toast.warning(result.message || `Test email sequence partially completed. Check console for details.`);
-        if (result.errors && result.errors.length > 0) {
-          console.warn("Test email sequence errors:", result.errors);
-        }
-      } else { // HTTP 200 OK
-        toast.success(result.message || `Test email sequence initiated successfully.`);
-      }
-
+      const result = await response.json();
+      toast.success(result.message || "Test email sent successfully!");
     } catch (error) {
       console.error("Error testing alert:", error);
-      toast.error((error as Error).message || "Failed to test the alert sequence");
+      toast.error((error as Error).message || "Failed to test the alert");
     } finally {
       setTestingAlertId(null);
     }
@@ -1350,7 +1373,7 @@ export default function ClientDetailPage() {
   };
 
   // New handler for services data changes
-  const handleServicesChange = (name: string, value: ServicesFormValue) => {
+  const handleServicesChange = (name: string, value: any) => {
     setServicesFormData(prev => ({
       ...prev,
       [name]: value
@@ -1427,7 +1450,7 @@ export default function ClientDetailPage() {
   };
   
   // Handler for Client Information changes
-  const handleClientInfoChange = (name: string, value: string) => {
+  const handleClientInfoChange = (name: string, value: any) => {
     setClientInfoFormData(prev => ({
       ...prev,
       [name]: value
@@ -1507,7 +1530,7 @@ export default function ClientDetailPage() {
   };
   
   // Handler for Key Dates changes
-  const handleDatesChange = (name: string, value: string) => {
+  const handleDatesChange = (name: string, value: any) => {
     setDatesFormData(prev => ({
       ...prev,
       [name]: value
@@ -1571,10 +1594,92 @@ export default function ClientDetailPage() {
   const handleCancelDatesEdit = () => {
     setIsEditingDates(false);
   };
+  
+  // Handler for Company Details edit mode
+  const handleEditCompany = () => {
+    if (client) {
+      setCompanyFormData({
+        companyName: client.companyName || '',
+        companyNumber: client.companyNumber || '',
+        companyAddress: client.companyAddress || '',
+        sicCode: client.sicCode || '',
+        companyStatus: client.companyStatus || 'active',
+        incorporationDate: client.incorporationDate || ''
+      });
+      setIsEditingCompany(true);
+    }
+  };
+  
+  // Handler for Company Details changes
+  const handleCompanyChange = (name: string, value: any) => {
+    setCompanyFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+  
+  // Handler to save Company Details
+  const handleSaveCompany = async () => {
+    if (!clientId || !client) {
+      toast.error('Client data is not loaded properly.');
+      return;
+    }
+    setSavingCompany(true);
+
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+        toast.error('User not authenticated. Please log in again.');
+        setSavingCompany(false);
+        router.push('/login');
+        return;
+    }
+
+    const companyDataToSave = {
+      company_name: companyFormData.companyName,
+      company_number: companyFormData.companyNumber,
+      registered_office_address: companyFormData.companyAddress,
+      sic_code: companyFormData.sicCode,
+      company_status: companyFormData.companyStatus,
+      incorporation_date: companyFormData.incorporationDate || null,
+      updated_by: user.id,
+    };
+
+    const { error } = await supabase
+      .from('clients')
+      .update(companyDataToSave)
+      .eq('id', clientId);
+
+    setSavingCompany(false);
+    if (error) {
+      console.error('Error updating company details:', error);
+      toast.error(`Error updating company details: ${error.message}`);
+    } else {
+      toast.success('Company details updated successfully!');
+      setIsEditingCompany(false);
+      
+      // Update client state with new values
+      setClient(prevClient => {
+        if (!prevClient) return null;
+        return {
+          ...prevClient,
+          companyName: companyFormData.companyName,
+          companyNumber: companyFormData.companyNumber,
+          companyAddress: companyFormData.companyAddress,
+          sicCode: companyFormData.sicCode,
+          companyStatus: companyFormData.companyStatus,
+          incorporationDate: companyFormData.incorporationDate
+        };
+      });
+    }
+  };
+  
+  // Handler to cancel Company Details edit
+  const handleCancelCompanyEdit = () => {
+    setIsEditingCompany(false);
+  };
 
   useEffect(() => {
     fetchClientDataAndRelated();
-    // eslint-disable-next-line react-hooks/exhaustive-deps 
   }, [clientId, refreshFiles]); // Added refreshFiles dependency
 
   useEffect(() => {
@@ -1612,44 +1717,6 @@ export default function ClientDetailPage() {
       setChatDisplayMessages([]); 
     }
   }, [client?.ai_document_notes, client?.last_ai_analysis_at]);
-
-  const handleToggleAlertActive = async (alertId: string, newIsActive: boolean) => {
-    const originalAlerts = [...clientAlerts];
-    const updatedAlerts = clientAlerts.map(alert =>
-      alert.id === alertId ? { ...alert, is_active: newIsActive } : alert
-    );
-    setClientAlerts(updatedAlerts); // Optimistic update
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/client-alerts/${alertId}/toggle-active`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ is_active: newIsActive }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        // Attempt to re-fetch to ensure UI consistency after error before reverting fully
-        if (clientId && typeof clientId === 'string') {
-          fetchClientAlertsForCurrentClient(clientId);
-        }
-        throw new Error(errorData.error || 'Failed to update alert status');
-      }
-      // If API call is successful, the optimistic update is correct.
-      toast.success(`Alert ${newIsActive ? 'activated' : 'deactivated'} successfully.`);
-      // Optionally re-fetch to get the most up-to-date state from server, though optimistic should be fine.
-      // if (clientId && typeof clientId === 'string') {
-      //   fetchClientAlertsForCurrentClient(clientId);
-      // }
-
-    } catch (error) {
-      console.error("Error toggling alert status:", error);
-      toast.error((error as Error).message || 'Could not update alert status.');
-      setClientAlerts(originalAlerts); // Revert optimistic update on error
-    }
-  };
 
   if (loading) {
     return (
@@ -2206,34 +2273,152 @@ export default function ClientDetailPage() {
 
                 <Card className="border-gray-200 shadow-sm hover:shadow-md transition-all">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-xl text-[#1a365d] flex items-center">
-                      <Building2 className="h-5 w-5 mr-2 text-primary/70" />
-                      Company Details
+                    <CardTitle className="text-xl text-[#1a365d] flex items-center justify-between">
+                      <div className="flex items-center">
+                        <Building2 className="h-5 w-5 mr-2 text-primary/70" />
+                        Company Details
+                      </div>
+                      {!isEditing && (
+                        <div>
+                          {isEditingCompany ? (
+                            <div className="flex gap-2">
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                className="h-7 text-gray-500"
+                                onClick={handleCancelCompanyEdit}
+                                disabled={savingCompany}
+                              >
+                                <XCircle className="h-4 w-4 mr-1" />
+                                Cancel
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                className="h-7 text-primary"
+                                onClick={handleSaveCompany}
+                                disabled={savingCompany}
+                              >
+                                {savingCompany ? (
+                                  <>
+                                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-primary mr-1"></div>
+                                    Saving...
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle className="h-4 w-4 mr-1" />
+                                    Save
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button 
+                              variant="ghost" 
+                              size="sm"
+                              className="h-7 text-gray-500"
+                              onClick={handleEditCompany}
+                            >
+                              <Edit className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div>
-                      <div className="text-sm text-gray-500">Company Name</div>
-                      <div className="font-medium flex items-center">
-                        {client.companyName}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-gray-500">Company Number</div>
-                      <div className="font-medium">{client.companyNumber}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-gray-500">SIC Code</div>
-                      <div className="font-medium">{client.sicCode}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-gray-500">Incorporation Date</div>
-                      <div className="font-medium">{formatDate(client.incorporationDate)}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-gray-500">Registered Office Address</div>
-                      <div className="font-medium whitespace-pre-line">{client.companyAddress}</div>
-                    </div>
+                    {isEditingCompany ? (
+                      <>
+                        <div>
+                          <Label htmlFor="companyName" className="mb-1 block text-xs text-gray-500">Company Name</Label>
+                          <Input 
+                            id="companyName" 
+                            value={companyFormData.companyName} 
+                            onChange={(e) => handleCompanyChange('companyName', e.target.value)}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="companyNumber" className="mb-1 block text-xs text-gray-500">Company Number</Label>
+                          <Input 
+                            id="companyNumber" 
+                            value={companyFormData.companyNumber} 
+                            onChange={(e) => handleCompanyChange('companyNumber', e.target.value)}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="sicCode" className="mb-1 block text-xs text-gray-500">SIC Code</Label>
+                          <Input 
+                            id="sicCode" 
+                            value={companyFormData.sicCode} 
+                            onChange={(e) => handleCompanyChange('sicCode', e.target.value)}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="companyStatus" className="mb-1 block text-xs text-gray-500">Company Status</Label>
+                          <Select 
+                            value={companyFormData.companyStatus} 
+                            onValueChange={(value) => handleCompanyChange('companyStatus', value)}
+                          >
+                            <SelectTrigger className="h-9">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="active">Active</SelectItem>
+                              <SelectItem value="dormant">Dormant</SelectItem>
+                              <SelectItem value="dissolved">Dissolved</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label htmlFor="incorporationDate" className="mb-1 block text-xs text-gray-500">Incorporation Date</Label>
+                          <Input 
+                            id="incorporationDate" 
+                            type="date"
+                            value={companyFormData.incorporationDate} 
+                            onChange={(e) => handleCompanyChange('incorporationDate', e.target.value)}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="companyAddress" className="mb-1 block text-xs text-gray-500">Registered Office Address</Label>
+                          <Textarea 
+                            id="companyAddress" 
+                            value={companyFormData.companyAddress} 
+                            onChange={(e) => handleCompanyChange('companyAddress', e.target.value)}
+                            rows={3}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <div className="text-sm text-gray-500">Company Name</div>
+                          <div className="font-medium flex items-center">
+                            {client.companyName}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-gray-500">Company Number</div>
+                          <div className="font-medium">{client.companyNumber}</div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-gray-500">SIC Code</div>
+                          <div className="font-medium">{client.sicCode}</div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-gray-500">Incorporation Date</div>
+                          <div className="font-medium">{formatDate(client.incorporationDate)}</div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-gray-500">Registered Office Address</div>
+                          <div className="font-medium whitespace-pre-line">{client.companyAddress}</div>
+                        </div>
+                      </>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -2465,7 +2650,7 @@ export default function ClientDetailPage() {
                           <Label htmlFor="vatFilingFrequency" className="mb-1 block text-xs text-gray-500">VAT Filing Frequency</Label>
                           <Select 
                             value={servicesFormData.vatFilingFrequency} 
-                            onValueChange={(value) => handleServicesChange('vatFilingFrequency', value as 'monthly' | 'quarterly' | 'annually')}
+                            onValueChange={(value) => handleServicesChange('vatFilingFrequency', value)}
                           >
                             <SelectTrigger className="h-8 text-sm">
                               <SelectValue />
@@ -2481,7 +2666,7 @@ export default function ClientDetailPage() {
                           <Label htmlFor="engagementLetterStatus" className="mb-1 block text-xs text-gray-500">Engagement Letter Status</Label>
                           <Select 
                             value={servicesFormData.engagementLetterStatus} 
-                            onValueChange={(value) => handleServicesChange('engagementLetterStatus', value as 'signed' | 'pending' | 'not_sent')}
+                            onValueChange={(value) => handleServicesChange('engagementLetterStatus', value)}
                           >
                             <SelectTrigger className="h-8 text-sm">
                               <SelectValue />
@@ -2558,448 +2743,6 @@ export default function ClientDetailPage() {
                         <div>
                           <div className="text-sm text-gray-500 mb-1">AI Notes</div>
                           <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded-md">
-                            {client.ai_document_notes ? (
-                              <>
-                                {truncateText(client.ai_document_notes, 20)}
-                                <div className="mt-2 text-xs text-primary italic flex items-center">
-                                  <ArrowRight className="h-3 w-3 mr-1" />
-                                  Go to the Documents tab to see the full analysis
-                                </div>
-                              </>
-                            ) : 'No additional notes from AI analysis.'}
-                          </div>
-                        </div>
-                        <div className="pt-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="w-full border-primary/30 text-primary hover:bg-primary/5"
-                            onClick={handleAnalyzeDocuments}
-                            disabled={isAnalyzing}
-                          >
-                            {isAnalyzing ? (
-                              <>
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary mr-2"></div>
-                                Analyzing...
-                              </>
-                            ) : (
-                              <>
-                                <RefreshCw className="h-4 w-4 mr-2" />
-                                Refresh Analysis
-                              </>
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center py-4 space-y-3">
-                        <Sparkles className="h-10 w-10 text-gray-300" />
-                        <p className="text-gray-500 text-center">No AI analysis available yet</p>
-                        <Button
-                          size="sm"
-                          className="bg-primary hover:bg-primary/90 text-white transition-colors"
-                          onClick={handleAnalyzeDocuments}
-                          disabled={isAnalyzing}
-                        >
-                          {isAnalyzing ? (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                              Analyzing...
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles className="h-4 w-4 mr-2" />
-                              Analyze Documents
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="financial" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-xl text-[#1a365d]">Financial Summary</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="p-4 border rounded-md bg-blue-50">
-                      <div className="text-sm text-gray-600">Last Year Turnover</div>
-                      <div className="text-2xl font-bold text-[#1a365d]">
-                        £{client.lastYearTurnover.toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="p-4 border rounded-md bg-green-50">
-                      <div className="text-sm text-gray-600">Profit/Loss</div>
-                      <div className={`text-2xl font-bold ${client.profitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        £{client.profitLoss.toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="p-4 border rounded-md bg-amber-50">
-                      <div className="text-sm text-gray-600">Tax Owed</div>
-                      <div className="text-2xl font-bold text-amber-600">
-                        £{client.taxOwed.toLocaleString()}
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="documents" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-xl text-[#1a365d]">Required Documents</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ul className="space-y-2">
-                    <li className="flex items-center">
-                      {client.requiredDocuments.bankStatements ? (
-                        <CheckCircle className="h-5 w-5 mr-2 text-green-600" />
-                      ) : (
-                        <XCircle className="h-5 w-5 mr-2 text-red-600" />
-                      )}
-                      <span>Bank Statements</span>
-                    </li>
-                    <li className="flex items-center">
-                      {client.requiredDocuments.receipts ? (
-                        <CheckCircle className="h-5 w-5 mr-2 text-green-600" />
-                      ) : (
-                        <XCircle className="h-5 w-5 mr-2 text-red-600" />
-                      )}
-                      <span>Receipts</span>
-                    </li>
-                    <li className="flex items-center">
-                      {client.requiredDocuments.payrollSummaries ? (
-                        <CheckCircle className="h-5 w-5 mr-2 text-green-600" />
-                      ) : (
-                        <XCircle className="h-5 w-5 mr-2 text-red-600" />
-                      )}
-                      <span>Payroll Summaries</span>
-                    </li>
-                  </ul>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle className="text-xl text-[#1a365d]">Recent Files</CardTitle>
-                  <Dialog open={isUploadDialogOpen} onOpenChange={setIsUploadDialogOpen}>
-                    <DialogTrigger asChild>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        disabled={!isBucketReady}
-                        title={!isBucketReady ? "Storage not configured" : "Upload new file"}
-                      >
-                        Upload New File
-                        {!isBucketReady && (
-                          <span className="ml-2 text-xs text-red-500">(Storage not ready)</span>
-                        )}
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent className="sm:max-w-md">
-                      <DialogHeader>
-                        <DialogTitle>Upload Document</DialogTitle>
-                      </DialogHeader>
-                      <div className="py-4">
-                        <div className="mb-4 text-sm text-gray-600">
-                          Upload a document for {client.clientName}. The file will be securely stored and accessible from this client&apos;s profile.
-                        </div>
-                        <FileUploader 
-                          clientId={client.id} 
-                          onUploadComplete={handleUploadComplete} 
-                        />
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-                </CardHeader>
-                <CardContent>
-                  {client.recentFiles && client.recentFiles.length > 0 ? (
-                    <ul className="space-y-2">
-                      {client.recentFiles.map((file, index) => (
-                        <li key={index} className="flex items-center justify-between p-2 border rounded-md">
-                          <div className="flex items-center gap-2 truncate">
-                            <File className="h-4 w-4 text-[#1a365d]" />
-                            <span className="truncate">{file.fileName}</span>
-                          </div>
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={() => handleDownloadFile(file.fileUrl, file.fileName)} 
-                          >
-                            <Download className="h-4 w-4 mr-1" />
-                            Download
-                          </Button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-center py-6 text-gray-500">No files uploaded yet</div>
-                  )}
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="text-xl text-[#1a365d]">AI Document Analysis</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  {client ? (
-                    <>
-                      {(client.ai_document_status || isAnalyzing && !isAskingQuestion) && ( 
-                        <div className="p-4 border rounded-md bg-slate-50 dark:bg-slate-800 mb-6">
-                          <div className="flex items-center gap-3 mb-2">
-                            <span className="font-semibold text-lg">Overall Document Health:</span>
-                            {(isAnalyzing && !isAskingQuestion) && !client.ai_document_status && (
-                              <Badge variant="secondary">Checking...</Badge>
-                            )}
-                            {client.ai_document_status && (
-                              <Badge 
-                                variant={
-                                  client.ai_document_status === 'Good' ? 'default' :
-                                  client.ai_document_status === 'Missing' ? 'destructive' :
-                                  'secondary'
-                                }
-                                className="flex items-center gap-1.5 text-base px-3 py-1"
-                              >
-                                {client.ai_document_status === 'Good' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                                {client.ai_document_status === 'Okay' && <AlertTriangle className="h-4 w-4 text-amber-500" />}
-                                {client.ai_document_status === 'Missing' && <XCircle className="h-4 w-4 text-red-500" />}
-                                {client.ai_document_status}
-                              </Badge>
-                            )}
-                          </div>
-                          {client.last_ai_analysis_at && client.ai_document_status && (
-                             <p className="text-xs text-gray-500 dark:text-gray-400">
-                                Full analysis last run: {new Date(client.last_ai_analysis_at).toLocaleString()}
-                             </p>
-                          )}
-                        </div>
-                      )}
-
-                      {(client.ai_document_notes || isAnalyzing || isAskingQuestion) && (
-                        <div className="pt-4 border-t min-h-[150px] max-h-[400px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-600 mb-4 bg-white dark:bg-slate-900 p-4 rounded-md border dark:border-slate-700">
-                          <h4 className="text-md font-semibold text-gray-700 dark:text-gray-300 mb-3 sticky top-0 bg-white dark:bg-slate-900 py-2 z-10">
-                            Analysis & Conversation Log:
-                          </h4>
-                          {(isAnalyzing && !isAskingQuestion) && !client.ai_document_notes && <p className="text-sm text-gray-500 dark:text-gray-400 px-2">Running full analysis, results will appear shortly...</p>}
-                          {isAskingQuestion && <p className="text-sm text-gray-500 dark:text-gray-400 px-2">Waiting for AI to answer your question...</p>}
-                          
-                          {chatDisplayMessages.length > 0 && ( // Use chatDisplayMessages state here
-                            <div className="space-y-4 px-1">
-                              {chatDisplayMessages.map((msg) => ( // Iterate over chatDisplayMessages
-                                <div 
-                                  key={msg.id} 
-                                  className={`flex flex-col ${msg.type === 'user' ? 'items-end' : 'items-start'}`}
-                                >
-                                  <div 
-                                    className={`max-w-[85%] p-3 rounded-lg shadow-sm ${ 
-                                      msg.type === 'user' ? "bg-primary text-primary-foreground rounded-br-none" : 
-                                      msg.type === 'system_report' ? "bg-blue-50 dark:bg-blue-900/50 border border-blue-200 dark:border-blue-800 w-full" : 
-                                      msg.type === 'ai_typing' ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 italic" :
-                                      "bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-bl-none" // AI message
-                                    }`}
-                                  >
-                                    {msg.type === 'ai_typing' ? (
-                                      <div className="flex items-center space-x-1.5">
-                                        <div className="w-2 h-2 bg-slate-500 rounded-full animate-pulse delay-75"></div>
-                                        <div className="w-2 h-2 bg-slate-500 rounded-full animate-pulse delay-150"></div>
-                                        <div className="w-2 h-2 bg-slate-500 rounded-full animate-pulse delay-300"></div>
-                                      </div>
-                                    ) : msg.isFullReport ? (
-                                      // If it's a full report, render with markdown (or however it's intended)
-                                      // For now, let's assume it might contain pre-formatted HTML or needs careful rendering
-                                      // This part might need specific Markdown rendering logic if msg.content is Markdown
-                                      <div 
-                                        className="prose prose-sm dark:prose-invert max-w-none" 
-                                        dangerouslySetInnerHTML={{ __html: msg.content.replace(/\n/g, '<br />') }} 
-                                      />
-                                    ) : (
-                                      // Standard message content
-                                      msg.content.split('\n').map((line, i, arr) => (
-                                        <React.Fragment key={i}>
-                                          {line}
-                                          {i < arr.length - 1 && <br />}
-                                        </React.Fragment>
-                                      ))
-                                    )}
-                                  </div>
-                                  {msg.timestamp && msg.type !== 'system_report' && msg.type !== 'ai_typing' && (
-                                    <p className={`text-xs mt-1 ${msg.type === 'user' ? 'text-slate-400 dark:text-slate-500 mr-1' : 'text-slate-500 dark:text-slate-400 ml-1'}`}>
-                                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </p>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          {(chatDisplayMessages.length === 0 && !isAnalyzing && !isAskingQuestion) && (
-                             <div className="text-center py-6 px-4">
-                               <Info className="mx-auto h-10 w-10 text-slate-400 mb-3" />
-                               <p className="font-semibold text-slate-700 dark:text-slate-300">AI Assistant Ready</p>
-                               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                                 Ask a question about the client&apos;s documents or click &quot;Analyze Documents&quot; for a full report.
-                               </p>
-                             </div>
-                          )}
-                        </div>
-                      )}
-                      
-                      {!client.ai_document_notes && !isAnalyzing && !isAskingQuestion && (
-                           <div className="text-center py-6 text-gray-500 dark:text-gray-400 min-h-[150px] flex flex-col justify-center items-center border rounded-md dark:border-slate-700">
-                             <MessageCircleQuestion className="h-10 w-10 mx-auto mb-3 text-slate-400"/>
-                             <p className="mb-1 font-semibold">AI Assistant Ready</p>
-                             <p className="text-xs">Use the input below to ask a question or run a full document analysis.</p>
-                           </div>
-                      )}
-
-                      <div className="mt-auto pt-4 border-t border-dashed dark:border-slate-700">
-                        <Label htmlFor="customUserQuestion" className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Your Message to AI:
-                        </Label>
-                        <Textarea
-                          id="customUserQuestion"
-                          value={customUserQuestion}
-                          onChange={(e) => setCustomUserQuestion(e.target.value)}
-                          placeholder="Type your question for the AI here..."
-                          rows={3}
-                          className="w-full mt-1 mb-3 dark:bg-slate-700 dark:text-slate-200 dark:placeholder-slate-400"
-                          disabled={isAnalyzing || isAskingQuestion || !client}
-                        />
-                        <div className="flex flex-col sm:flex-row gap-2 justify-end">
-                          <Button 
-                            onClick={handleAnalyzeDocuments} 
-                            disabled={isAnalyzing || isAskingQuestion || !client}
-                            variant="outline"
-                            className="w-full sm:w-auto dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
-                          >
-                            <Sparkles className={`mr-2 h-4 w-4 ${isAnalyzing ? 'animate-spin' : ''}`} />
-                            {isAnalyzing ? 'Running Full Analysis...' : 'Run Full Analysis'}
-                          </Button>
-                          <Button 
-                            onClick={handleAskCustomQuestion}
-                            disabled={isAnalyzing || isAskingQuestion || !client || !customUserQuestion.trim()}
-                            className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground"
-                          >
-                            <SendHorizontal className={`mr-2 h-4 w-4 ${isAskingQuestion ? 'animate-pulse' : ''}`} />
-                            {isAskingQuestion ? 'Sending...' : 'Send Question'}
-                          </Button>
-                        </div>
-                      </div>
-
-                      {analysisError && (
-                        <div className="mt-6 p-3 border border-red-300 bg-red-50 rounded-md text-red-700 text-sm">
-                          <div className="flex items-center">
-                             <AlertCircle className="h-5 w-5 mr-2 text-red-600" /> 
-                             <strong>Error during analysis:</strong>
-                          </div>
-                          <p className='mt-1 ml-7'>{analysisError}</p>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="text-center py-6 text-gray-500 dark:text-gray-400">
-                      Loading client data for AI analysis...
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="tasks" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Client Tasks</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {clientTasks.length === 0 ? (
-                    <p className="text-gray-500 text-center py-4">No tasks found for this client.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {clientTasks.map((task) => {
-                        const assignedUser = profiles.find(p => p.id === task.assigned_user_id);
-                        const currentStageIndex = workflowStages.indexOf(task.stage);
-                        const isLastStageForNextButton = currentStageIndex === workflowStages.length - 1 || task.stage === 'On Hold / Blocked';
-                        return (
-                          <div key={task.id} className="border rounded-md p-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                            <div className="flex-grow">
-                              <p className="font-medium text-gray-800 mb-1">{task.task_title}</p>
-                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
-                                <span>Stage: <Badge variant="secondary" className="font-normal">{task.stage}</Badge></span>
-                                {task.priority && (
-                                  <span>Priority: <Badge variant={task.priority === 'High' ? 'destructive' : task.priority === 'Medium' ? 'secondary' : 'outline'} className="font-normal">{task.priority}</Badge></span>
-                                )}
-                                {task.due_date && <span>Due: {formatDate(task.due_date)}</span>}
-                                <span>Assigned: {assignedUser?.email ?? 'Unassigned'}</span>
-                              </div>
-                            </div>
-                            <div className="flex items-center space-x-1 flex-shrink-0">
-                              {task.stage === 'On Hold / Blocked' && (
-                                <Button 
-                                  variant="destructive"
-                                  size="sm"
-                                  onClick={() => handleDeleteTask(task.id)}
-                                  title="Clear this task permanently"
-                                >
-                                  <TrashIcon className="h-4 w-4" />
-                                </Button>
-                              )}
-                              {!isLastStageForNextButton && task.stage !== 'Completed / Filed' && task.stage !== 'On Hold / Blocked' && (
-                                <Button 
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleMoveToNextStage(task.id)}
-                                  title={`Move to: ${workflowStages[currentStageIndex + 1]}`}
-                                >
-                                  <ArrowRight className="h-4 w-4" />
-                                </Button>
-                              )}
-                              {task.stage === 'Completed / Filed' && (
-                                <span className="text-xs text-green-600 font-semibold inline-flex items-center"><CheckCircle className="h-4 w-4 mr-1"/> Done</span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <Button 
-                    variant="outline"
-                    size="sm"
-                    className="mt-4"
-                    onClick={() => router.push(`/dashboard/tasks?clientId=${clientId}`)} 
-                  > 
-                     View Full Task Board / Add Task
-                   </Button>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="notes" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-xl text-[#1a365d]">Activity Log / Detailed Notes</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div>
-                      <Label htmlFor="newClientNote" className="mb-1 block">Add a new note</Label>
-                      <Textarea
-                        id="newClientNote"
-                        value={newNoteContent}
-                        onChange={(e) => setNewNoteContent(e.target.value)}
-                        placeholder="Type your detailed note here..."
-                        rows={3}
-                        disabled={addingNote}
-                        className="mb-2"
-                      />
-                      <Button onClick={handleAddClientNote} disabled={addingNote || !newNoteContent.trim()}>
-                        {addingNote ? 'Adding Note...' : 'Add Note'}
-                      </Button>
-                    </div>
                     <div className="mt-6 space-y-3">
                       <h4 className="text-md font-semibold text-gray-700">Previous Notes:</h4>
                       {detailedClientNotes.length > 0 ? (
@@ -3037,149 +2780,91 @@ export default function ClientDetailPage() {
             </TabsContent>
 
             <TabsContent value="alerts" className="space-y-6">
-              <Card>
-                <CardHeader className="flex flex-row justify-between items-center">
-                  <CardTitle className="text-xl text-[#1a365d]">Reminder Alerts</CardTitle>
+              {!showCreateAlertForm && !showEditAlertForm && (
+                <div className="mb-6">
                   <Button onClick={handleOpenCreateAlertForm} variant="outline" size="sm">
-                    <Plus className="mr-2 h-4 w-4" /> Add New Alert
+                    <ListChecks className="mr-2 h-4 w-4" />
+                    Configure New Alert
                   </Button>
-                </CardHeader>
-                <CardContent>
-                  {showCreateAlertForm && (
-                    <Dialog open={showCreateAlertForm} onOpenChange={setShowCreateAlertForm}>
-                      <DialogContent className="sm:max-w-3xl overflow-y-auto max-h-[85vh]"> {/* Added overflow-y-auto and max-h-[85vh] */}
-                        <DialogHeader>
-                          <DialogTitle>Create New Alert</DialogTitle>
-                        </DialogHeader>
-                        <ClientAlertForm
-                          initialData={{ client_id: clientId as string }}
-                          clients={[]} // Provide empty array for required prop
-                          onSuccess={(msg) => { handleAlertFormSuccess(msg); setShowCreateAlertForm(false); }}
-                          apiBaseUrl={apiBaseUrl}
-                          alertToEdit={null}
-                        />
-                      </DialogContent>
-                    </Dialog>
-                  )}
-                  {showEditAlertForm && editingAlert && (
-                     <Dialog open={showEditAlertForm} onOpenChange={setShowEditAlertForm}>
-                       <DialogContent className="sm:max-w-3xl overflow-y-auto max-h-[85vh]"> {/* Added overflow-y-auto and max-h-[85vh] */}
-                         <DialogHeader>
-                           <DialogTitle>Edit Alert</DialogTitle>
-                         </DialogHeader>
-                         <ClientAlertForm
-                           clients={[]} // Provide empty array for required prop
-                           alertToEdit={editingAlert} // Use alertToEdit prop
-                           onSuccess={(msg) => { handleAlertFormSuccess(msg); setShowEditAlertForm(false);}}
-                           apiBaseUrl={apiBaseUrl}
-                         />
-                       </DialogContent>
-                     </Dialog>
-                  )}
+                </div>
+              )}
 
-                  {loadingAlerts ? (
-                    <p className="text-gray-500 text-center py-4">Loading alerts...</p>
-                  ) : clientAlerts.length === 0 ? (
-                    <div className="text-center py-6 text-gray-500 dark:text-gray-400 min-h-[150px] flex flex-col justify-center items-center border rounded-md dark:border-slate-700">
-                       <FileCog className="h-10 w-10 mx-auto mb-3 text-slate-400"/>
-                       <p className="mb-1 font-semibold">No Reminder Alerts Configured</p>
-                       <p className="text-xs mb-3">Click &quot;Add New Alert&quot; to set up automated reminders.</p>
-                       <Button onClick={handleOpenCreateAlertForm} variant="default" size="sm">
-                         <Plus className="mr-2 h-4 w-4" /> Add First Alert
-                       </Button>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {clientAlerts.map((alert) => (
-                        <div key={alert.id} className="p-4 border rounded-lg bg-slate-50 dark:bg-slate-800 shadow-sm hover:shadow-md transition-shadow">
-                          <div className="flex justify-between items-start mb-2">
-                            <div className="flex-grow">
-                              <p className="font-semibold text-slate-800 dark:text-slate-100 text-md">
-                                {alert.alert_type.replace(/_/g, ' ')}
-                              </p>
-                              <p className="text-xs text-slate-500 dark:text-slate-400">
-                                Notify: <span className="font-medium">{alert.notification_preference.replace('DRAFT_FOR_TEAM', 'Draft for Team').replace('SEND_DIRECT_TO_CLIENT', 'Direct to Client')}</span>
-                                {' | '}
-                                Primary Trigger: <span className="font-medium">{alert.days_before_due} days before due</span>
-                              </p>
-                            </div>
-                            <div className="flex items-center space-x-2 flex-shrink-0 ml-4">
-                               <UISwitch
-                                 id={`alert-active-${alert.id}`}
-                                 checked={alert.is_active}
-                                 onCheckedChange={(newIsActive) => handleToggleAlertActive(alert.id, newIsActive)}
-                                 aria-label={alert.is_active ? 'Deactivate Alert' : 'Activate Alert'}
-                               />
-                               <Label htmlFor={`alert-active-${alert.id}`} className="text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
-                                 {alert.is_active ? 'Active' : 'Inactive'}
-                               </Label>
-                             </div>
-                          </div>
-                          {alert.body && ( // Check alert.body
-                            <div className="mt-2 p-2.5 bg-slate-100 dark:bg-slate-700 rounded-md">
-                              <p className="text-xs text-slate-600 dark:text-slate-300 font-medium mb-1">Primary Message Preview:</p>
-                              <p className="text-xs text-slate-500 dark:text-slate-400 truncate" title={alert.body}> {/* Use alert.body for title */}
-                                {truncateText(alert.body, 20)} {/* Use alert.body for truncateText */}
-                              </p>
-                            </div>
-                          )}
-                          {/* Display Reminder Schedules */}
-                          {alert.use_multi_schedule && alert.reminder_schedules && alert.reminder_schedules.length > 0 && (
-                            <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-600">
-                              <p className="text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">Follow-up Reminders:</p>
-                              <div className="space-y-2 pl-2">
-                                {alert.reminder_schedules
-                                  .filter(schedule => schedule.days_before_due !== alert.days_before_due) // Exclude the primary schedule if it's duplicated
-                                  .sort((a, b) => b.days_before_due - a.days_before_due) // Show earliest first (more days before)
-                                  .map((schedule, index) => (
-                                    <div key={schedule.id || `schedule-${index}`} className="p-2 bg-slate-200/50 dark:bg-slate-700/50 rounded">
-                                      <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                                        {schedule.days_before_due} days before due
-                                      </p>
-                                      {schedule.alert_message && (
-                                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate" title={schedule.alert_message}>
-                                          Custom Message: {truncateText(schedule.alert_message, 15)}
-                                        </p>
-                                      )} 
-                                      {!schedule.alert_message && (
-                                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 italic">
-                                          Uses primary alert message.
-                                        </p>
-                                      )}
-                                    </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700 flex justify-end items-center space-x-2">
-                            <Button variant="ghost" size="sm" onClick={() => handleOpenEditAlertForm(alert)} className="text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-100">
-                              <EditIcon className="h-4 w-4 mr-1.5" /> Edit
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              onClick={() => handleTestAlert(alert.id)} 
-                              disabled={testingAlertId === alert.id}
-                              className="text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-100"
-                            >
-                              {testingAlertId === alert.id ? <RefreshCw className="h-4 w-4 mr-1.5 animate-spin" /> : <SendIcon className="h-4 w-4 mr-1.5" />} 
-                              {testingAlertId === alert.id ? 'Sending...' : 'Test'}
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              onClick={() => handleDeleteAlert(alert.id)}
-                              className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-500"
-                            >
-                              <TrashIcon className="h-4 w-4 mr-1.5" /> Delete
-                            </Button>
-                          </div>
+              {(showCreateAlertForm || showEditAlertForm) && client && clientId && typeof clientId === 'string' && apiBaseUrl && (
+                <Card className="mt-4 mb-6 border-blue-200 shadow-md">
+                  <CardHeader className="flex flex-row justify-between items-center">
+                    <CardTitle className="text-lg text-blue-700">
+                      {editingAlert ? `Edit Reminder for ${client.clientName}` : `New Reminder for ${client.clientName}`}
+                    </CardTitle>
+                    <Button variant="ghost" size="icon" onClick={handleCancelAlertForm} title="Cancel">
+                      <XIcon className="h-5 w-5" />
+                    </Button>
+                  </CardHeader>
+                  <CardContent>
+                    <ClientAlertForm
+                      clients={[]} 
+                      apiBaseUrl={apiBaseUrl} 
+                      onSuccess={handleAlertFormSuccess}
+                      initialData={!editingAlert ? { client_id: clientId } : undefined} // Pass initialData only for new alerts
+                      alertToEdit={editingAlert} // Pass the alert to edit
+                    />
+                  </CardContent>
+                </Card>
+              )}
+
+              <div className="mt-4">
+                <h3 className="text-md font-semibold mb-3 text-gray-700 border-b pb-1">Configured Alerts:</h3>
+                {loadingAlerts ? (
+                  <p>Loading alerts...</p>
+                ) : clientAlerts.length === 0 ? (
+                  <p className="text-sm text-gray-500">No reminder alerts configured for this client yet.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {clientAlerts.map((alert) => (
+                      <div key={alert.id} className="p-3 border rounded-md bg-slate-50 text-sm shadow-sm">
+                        <div className="flex justify-between items-start mb-1">
+                          <p className="font-semibold text-slate-700 flex-grow">{alert.alert_type.replace(/_/g, ' ')}</p>
+                          <Badge variant={alert.is_active ? "default" : "secondary"} className="ml-2 flex-shrink-0">
+                            {alert.is_active ? 'Active' : 'Inactive'}
+                          </Badge>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                        <p className="text-xs text-slate-500">
+                          Notify: {alert.notification_preference.replace('DRAFT_FOR_TEAM', 'Draft for Team').replace('SEND_DIRECT_TO_CLIENT', 'Direct Send')}
+                          {' | '} 
+                          Trigger: {alert.days_before_due} days before
+                        </p>
+                        <p className="mt-1 text-xs text-slate-600 truncate" title={alert.alert_message}>
+                          Message: {alert.alert_message}
+                        </p>
+                         <div className="mt-2 flex justify-end space-x-2">
+                           <Button variant="outline" size="sm" onClick={() => handleOpenEditAlertForm(alert)} title="Edit Alert">
+                             <EditIcon className="h-3 w-3 mr-1" /> Edit
+                           </Button>
+                           <Button 
+                             variant="outline" 
+                             size="sm" 
+                             onClick={() => handleTestAlert(alert.id)} 
+                             disabled={testingAlertId === alert.id}
+                             title="Send test email to yourself"
+                           >
+                             {testingAlertId === alert.id ? (
+                               <>
+                                 <Clock className="h-3 w-3 mr-1 animate-spin" /> Testing...
+                               </>
+                             ) : (
+                               <>
+                                 <SendIcon className="h-3 w-3 mr-1" /> Test
+                               </>
+                             )}
+                           </Button>
+                           <Button variant="destructive" size="sm" onClick={() => handleDeleteAlert(alert.id)} title="Delete Alert">
+                             <TrashIcon className="h-3 w-3 mr-1" /> Delete
+                           </Button>
+                         </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </TabsContent>
           </Tabs>
         </div>

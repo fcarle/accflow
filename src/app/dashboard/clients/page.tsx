@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Building2, Mail, Phone, Calendar, FileText, AlertCircle, LayoutGrid, List, ChevronDown, Search, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback, FormEvent } from 'react';
+import { Plus, Building2, Mail, Phone, Calendar, LayoutGrid, List, Search, RefreshCw, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -31,14 +31,14 @@ import { supabase } from '@/lib/supabase';
 import { Dialog as UploadDialog, DialogContent as UploadDialogContent, DialogHeader as UploadDialogHeader, DialogTitle as UploadDialogTitle, DialogTrigger as UploadDialogTrigger } from '@/components/ui/dialog';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { BarChart3 } from 'lucide-react';
+import Papa from 'papaparse'; // Added papaparse import
 
 // Helper function to generate a UUID v4
 function generateUUID() { // Public Domain/MIT
-    var d = new Date().getTime();//Timestamp
-    var d2 = ((typeof performance !== 'undefined') && performance.now && (performance.now()*1000)) || 0;//Time in microseconds since page-load or 0 if unsupported
+    let d = new Date().getTime();//Timestamp
+    let d2 = ((typeof performance !== 'undefined') && performance.now && (performance.now()*1000)) || 0;//Time in microseconds since page-load or 0 if unsupported
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        var r = Math.random() * 16;//random number between 0 and 16
+        let r = Math.random() * 16;//random number between 0 and 16
         if(d > 0){//Use timestamp until depleted
             r = (d + r)%16 | 0;
             d = Math.floor(d/16);
@@ -65,6 +65,52 @@ interface CompanyHouseData {
   sic_code_sic_text_1: string | null;
   accounts_next_due_date: string | null;
   conf_stmt_next_due_date: string | null;
+}
+
+// New interface for the direct Companies House API response
+interface CompaniesHouseApiResponse {
+  company_name: string;
+  company_number: string;
+  registered_office_address: {
+    address_line_1?: string;
+    address_line_2?: string;
+    locality?: string; // Often used for Post Town
+    region?: string; // Often used for County
+    postal_code?: string;
+  };
+  company_status: string;
+  date_of_creation?: string; // Typically YYYY-MM-DD for incorporation_date
+  sic_codes?: string[]; // SIC codes can be an array
+  accounts?: {
+    next_due?: string; // YYYY-MM-DD
+  };
+  confirmation_statement?: {
+    next_due?: string; // YYYY-MM-DD
+  };
+  // Add other fields as needed from the CH API
+}
+
+// Interface for the error structure that might be relayed from Companies House API
+interface CompaniesHouseError {
+  error: {
+    message?: string;
+    type?: string;
+    error?: string; // Nested error string, e.g., "company profile not found"
+  } | string; // The top-level error property could also be a simple string
+}
+
+// Type guard to check if the API response is a CompaniesHouseError
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isCompaniesHouseError(response: any): response is CompaniesHouseError {
+  return response && (typeof response.error === 'object' || typeof response.error === 'string');
+}
+
+// Define AlertTemplate interface (similar to the one in create-alert-from-task.ts)
+interface AlertTemplate {
+  alert_type: string;
+  message_template: string;
+  default_days_before_due?: number;
+  // Add other fields if your alert_templates table has more that are used here
 }
 
 // Define ClientTask interface (can be shared if moved to a types file)
@@ -128,11 +174,6 @@ interface Client {
   lastInteractionNotes: string;
   
   // Automations
-  reminderSchedule: {
-    vatReminderDays: number;
-    accountsReminderDays: number;
-    confirmationStatementReminderDays: number;
-  };
   customAlerts: {
     missedReminders: boolean;
     documentOverdue: boolean;
@@ -189,11 +230,6 @@ const initialClientFormData: FormData = {
   recentFiles: [],
   lastInteractionNotes: '',
   // Automations
-  reminderSchedule: {
-    vatReminderDays: 30,
-    accountsReminderDays: 30,
-    confirmationStatementReminderDays: 30,
-  },
   customAlerts: {
     missedReminders: false,
     documentOverdue: false,
@@ -237,6 +273,331 @@ const getClientTaskStatus = (clientId: string, allTasks: ClientTask[]): string =
   return activeTasks[0].stage;
 };
 
+// RawClientFromDB interface for data directly from Supabase 'clients' table
+interface RawClientFromDB {
+  id: string;
+  client_name?: string | null;
+  client_email?: string | null;
+  client_phone?: string | null;
+  client_role?: string | null;
+  preferred_contact_method?: 'email' | 'sms' | 'whatsapp' | 'phone' | null;
+  company_name?: string | null;
+  company_number?: string | null;
+  registered_office_address?: string | null;
+  sic_code?: string | null;
+  company_status?: 'active' | 'dormant' | 'dissolved' | null;
+  incorporation_date?: string | null;
+  year_end_date?: string | null;
+  next_accounts_due?: string | null;
+  next_confirmation_statement_due?: string | null;
+  vat_filing_frequency?: 'monthly' | 'quarterly' | 'annually' | null;
+  next_vat_due?: string | null;
+  payroll_deadlines?: string[] | null;
+  corporation_tax_deadline?: string | null;
+  services?: string[] | null;
+  engagement_letter_signed?: boolean | null;
+  required_documents?: string | { bankStatements: boolean; receipts: boolean; payrollSummaries: boolean; } | null;
+  task_status?: 'waiting' | 'in_progress' | 'completed' | null;
+  recent_files?: string | string[] | null;
+  last_interaction_notes?: string | null;
+  custom_alerts?: string | { missedReminders: boolean; documentOverdue: boolean; } | null;
+  automated_emails?: boolean | null;
+  last_year_turnover?: number | null;
+  profit_loss?: number | null;
+  tax_owed?: number | null;
+  shareable_link_token?: string | null;
+  notes?: string | null;
+  meeting_log?: string[] | null;
+  email_history?: string[] | null;
+}
+
+// NEW FUNCTION: mapClientData
+const mapClientData = (clientsData: RawClientFromDB[], tasksData: ClientTask[]): Client[] => {
+  return (clientsData || []).map((client: RawClientFromDB) => {
+    let parsedRequiredDocuments = { bankStatements: false, receipts: false, payrollSummaries: false };
+    try {
+      const rawDocs = client.required_documents;
+      if (rawDocs && typeof rawDocs === 'string') {
+        const parsed = JSON.parse(rawDocs);
+        parsedRequiredDocuments = {
+            bankStatements: !!parsed.bankStatements,
+            receipts: !!parsed.receipts,
+            payrollSummaries: !!parsed.payrollSummaries,
+        };
+      } else if (rawDocs && typeof rawDocs === 'object') { // Ensure not null if object
+        parsedRequiredDocuments = {
+            bankStatements: !!(rawDocs as { bankStatements?: boolean }).bankStatements,
+            receipts: !!(rawDocs as { receipts?: boolean }).receipts,
+            payrollSummaries: !!(rawDocs as { payrollSummaries?: boolean }).payrollSummaries,
+        };
+      }
+    } catch (e) { console.error("Failed to parse required_documents", e); /* stays default */ }
+
+    let parsedCustomAlerts = { missedReminders: false, documentOverdue: false };
+    try {
+      const rawAlerts = client.custom_alerts;
+      if (rawAlerts && typeof rawAlerts === 'string') {
+        const parsed = JSON.parse(rawAlerts);
+        parsedCustomAlerts = {
+            missedReminders: !!parsed.missedReminders,
+            documentOverdue: !!parsed.documentOverdue,
+        };
+      } else if (rawAlerts && typeof rawAlerts === 'object') { // Ensure not null if object
+        parsedCustomAlerts = {
+            missedReminders: !!(rawAlerts as { missedReminders?: boolean }).missedReminders,
+            documentOverdue: !!(rawAlerts as { documentOverdue?: boolean }).documentOverdue,
+        };
+      }
+    } catch (e) { console.error("Failed to parse custom_alerts", e); /* stays default */ }
+
+    return {
+      id: client.id,
+      clientName: client.client_name || '',
+      clientEmail: client.client_email || '',
+      clientPhone: client.client_phone || '',
+      clientRole: client.client_role || null,
+      preferredContactMethod: client.preferred_contact_method || 'email',
+      companyName: client.company_name || '',
+      companyNumber: client.company_number || '',
+      companyAddress: client.registered_office_address || '',
+      sicCode: client.sic_code || '',
+      companyStatus: (client.company_status as Client['companyStatus']) || 'active',
+      incorporationDate: client.incorporation_date || '',
+      yearEndDate: client.year_end_date || '',
+      nextAccountsDue: client.next_accounts_due || '',
+      nextConfirmationStatementDue: client.next_confirmation_statement_due || '',
+      vatFilingFrequency: (client.vat_filing_frequency as Client['vatFilingFrequency']) || 'quarterly',
+      nextVatDue: client.next_vat_due || '',
+      payrollDeadlines: client.payroll_deadlines || [],
+      corporationTaxDeadline: client.corporation_tax_deadline || '',
+      services: client.services || [],
+      engagementLetterStatus: client.engagement_letter_signed === null || client.engagement_letter_signed === undefined ? 'not_sent' : (client.engagement_letter_signed ? 'signed' : 'not_sent'),
+      requiredDocuments: parsedRequiredDocuments,
+      originalTaskStatus: client.task_status || 'waiting',
+      derivedTaskStatus: getClientTaskStatus(client.id, tasksData || []),
+      recentFiles: client.recent_files ? (typeof client.recent_files === 'string' ? JSON.parse(client.recent_files) : client.recent_files) : [],
+      lastInteractionNotes: client.last_interaction_notes || '',
+      customAlerts: parsedCustomAlerts,
+      automatedEmails: client.automated_emails ?? true, // Handle null/undefined, default to true
+      lastYearTurnover: client.last_year_turnover || 0,
+      profitLoss: client.profit_loss || 0,
+      taxOwed: client.tax_owed || 0,
+      shareableLinkToken: client.shareable_link_token || '',
+      notes: client.notes || '',
+      meetingLog: client.meeting_log || [],
+      emailHistory: client.email_history || [],
+    };
+  });
+};
+
+// Define the alert types we'll use for auto-creation
+const AUTO_ALERT_TYPES = {
+  NEXT_ACCOUNTS_DUE: 'NEXT_ACCOUNTS_DUE',
+  NEXT_CONFIRMATION_STATEMENT_DUE: 'NEXT_CONFIRMATION_STATEMENT_DUE',
+  NEXT_VAT_DUE: 'NEXT_VAT_DUE',
+  CORPORATION_TAX_DEADLINE: 'CORPORATION_TAX_DEADLINE',
+};
+
+// --- Helper Function to Create Single Alert ---
+const createClientAlert = async (clientId: string, alertType: string, dueDate: string | null, templateContent: string) => {
+  if (!dueDate) return; // Don't create alert if no due date
+
+  const daysBefore = 30; // Default days before, maybe make configurable later?
+  const notificationPreference = 'DRAFT_FOR_TEAM'; // Default preference
+
+  // Replace placeholders in the template
+  // Note: We might need more context (like client name) passed into this function or fetched here
+  const message = templateContent
+      .replace(/{{client_name}}/g, '[Client Name]') // Placeholder replacement needed
+      .replace(/{{company_name}}/g, '[Company Name]') // Placeholder replacement needed
+      .replace(/{{due_date}}/g, new Date(dueDate).toLocaleDateString()); // Format date
+
+  const { error } = await supabase
+      .from('client_alerts')
+      .insert({
+          client_id: clientId,
+          alert_type: alertType,
+          days_before_due: daysBefore,
+          notification_preference: notificationPreference,
+          is_active: true,
+          alert_message: message, 
+      });
+
+  if (error) {
+      console.error(`Error creating alert ${alertType} for client ${clientId}:`, error);
+      toast.error(`Failed to create alert for ${alertType.replace(/_/g, ' ')}`);
+  } else {
+      console.log(`Alert ${alertType} created for client ${clientId}`);
+  }
+};
+
+// Type for the data selected from companies_house_data
+type CompanyDataQueryResult = Pick<
+  CompanyHouseData,
+  | 'company_name'
+  | 'company_status'
+  | 'incorporation_date'
+  | 'sic_code_sic_text_1'
+  | 'reg_address_address_line1'
+  | 'reg_address_address_line2'
+  | 'reg_address_post_town'
+  | 'reg_address_county'
+  | 'reg_address_post_code'
+  | 'accounts_next_due_date'
+  | 'conf_stmt_next_due_date'
+>;
+
+const fetchCompanyDetailsByNumber = async (companyNumber: string): Promise<Partial<Client>> => {
+  if (!companyNumber) {
+    return {};
+  }
+
+  // 1. Try fetching from local Supabase table (companies_house_data)
+  try {
+    const { data: localData, error: localError } = await supabase
+      .from('companies_house_data')
+      .select(
+        'company_name, company_status, incorporation_date, sic_code_sic_text_1, ' +
+        'reg_address_address_line1, reg_address_address_line2, reg_address_post_town, ' +
+        'reg_address_county, reg_address_post_code, accounts_next_due_date, conf_stmt_next_due_date'
+      )
+      .eq('company_number', companyNumber)
+      .maybeSingle<CompanyDataQueryResult>();
+
+    if (localError) {
+      console.error('Error fetching company details from local companies_house_data:', localError);
+      // Don't toast error yet, allow fallback to CH API
+    }
+
+    if (localData) {
+      console.log("Found company in local DB:", localData.company_name);
+      toast.info(`Details for ${localData.company_name || companyNumber} found in local cache.`);
+      const addressParts = [
+        localData.reg_address_address_line1,
+        localData.reg_address_address_line2,
+        localData.reg_address_post_town,
+        localData.reg_address_county,
+        localData.reg_address_post_code,
+      ].filter(part => part && part.trim() !== '');
+      const companyAddress = addressParts.join(', ');
+
+      let mappedStatus: Client['companyStatus'] = 'active';
+      if (localData.company_status) {
+        const lowerStatus = localData.company_status.toLowerCase();
+        if (lowerStatus === 'active' || lowerStatus === 'dormant' || lowerStatus === 'dissolved') {
+          mappedStatus = lowerStatus as Client['companyStatus'];
+        }
+      }
+
+      return {
+        companyName: localData.company_name || undefined,
+        companyAddress: companyAddress || undefined,
+        sicCode: localData.sic_code_sic_text_1 || undefined,
+        companyStatus: mappedStatus,
+        incorporationDate: localData.incorporation_date || undefined,
+        nextAccountsDue: localData.accounts_next_due_date || undefined,
+        nextConfirmationStatementDue: localData.conf_stmt_next_due_date || undefined,
+      };
+    }
+  } catch (err: unknown) { // Changed any to unknown
+    console.error('Exception fetching company details from local DB:', err);
+    // Don't toast error yet, allow fallback to CH API
+  }
+
+  // 2. If not found locally, try fetching from Companies House API via our backend proxy
+  console.log(`Company ${companyNumber} not found in local DB. Trying Companies House API via proxy.`);
+  
+  // The API key is now handled by the backend route, so no need for process.env here for the key itself.
+
+  try {
+    // Call our internal API route which will then call Companies House
+    const response = await fetch(`/api/company-lookup?companyNumber=${companyNumber}`);
+
+    if (!response.ok) {
+      let errorData = { message: 'Failed to fetch from proxy' }; // Default error
+      try {
+        errorData = await response.json(); // Try to parse error from our proxy
+      } catch { // Removed unused 'e'
+        console.warn('Could not parse JSON error from proxy response');
+      }
+
+      if (response.status === 404 || (errorData.message && errorData.message.toLowerCase().includes('not found'))) {
+        toast.info(`No details found for company number: ${companyNumber} via Companies House.`);
+        return { companyName: "Details not found" };
+      }
+      console.error('Error fetching from company-lookup proxy:', response.status, errorData);
+      toast.error(`Error looking up company ${companyNumber}: ${errorData.message || response.statusText}`);
+      return {}; // Or a more specific error object
+    }
+
+    const apiData: CompaniesHouseApiResponse | CompaniesHouseError = await response.json();
+    
+    // Check if apiData itself indicates an error passed through from the CH API via our proxy
+    if (isCompaniesHouseError(apiData)) {
+        const errorDetails = apiData.error;
+        const errorMessage = typeof errorDetails === 'string' ? errorDetails : errorDetails.message;
+        const errorType = typeof errorDetails === 'object' ? errorDetails.type : undefined;
+        const nestedErrorString = typeof errorDetails === 'object' ? errorDetails.error : undefined;
+
+        console.error('Error from Companies House API (relayed by proxy):', errorDetails);
+        toast.error(`Companies House error for ${companyNumber}: ${errorMessage || 'Unknown CH error'}`);
+        
+        if (errorType === 'ch:service' && nestedErrorString?.toLowerCase().includes('company profile not found')){
+             return { companyName: "Details not found" };
+        }
+        return {};
+    }
+    // If it's not an error, it should be CompaniesHouseApiResponse, so cast it if necessary or rely on TS inference
+    // For direct property access below, TypeScript should infer apiData as CompaniesHouseApiResponse here.
+
+    if (Object.keys(apiData).length === 0) { // Handle if proxy returns empty object on some CH errors
+        toast.info(`No details found for company number: ${companyNumber} via Companies House (empty response).`);
+        return { companyName: "Details not found" };
+    }
+
+    toast.success(`Successfully fetched details for ${apiData.company_name || companyNumber} from Companies House.`);
+
+    const addressParts = [
+      apiData.registered_office_address?.address_line_1,
+      apiData.registered_office_address?.address_line_2,
+      apiData.registered_office_address?.locality,
+      apiData.registered_office_address?.region,
+      apiData.registered_office_address?.postal_code,
+    ].filter(part => part && part.trim() !== '');
+    const companyAddress = addressParts.join(', ');
+
+    let mappedStatus: Client['companyStatus'] = 'active';
+    if (apiData.company_status) {
+      const lowerStatus = apiData.company_status.toLowerCase();
+      if (lowerStatus === 'active' || lowerStatus === 'dormant' || lowerStatus === 'dissolved') {
+        mappedStatus = lowerStatus as Client['companyStatus'];
+      } else if (lowerStatus.includes('dissolved')) { // Handle cases like "dissolved on..."
+        mappedStatus = 'dissolved';
+      }
+    }
+    
+    // It's good practice to also store this fetched data in your local companies_house_data table
+    // to reduce future API calls. This part is not implemented here but is a recommendation.
+    // Example: await saveToLocalCache({ ...apiData });
+
+    return {
+      companyName: apiData.company_name || undefined,
+      companyAddress: companyAddress || undefined,
+      sicCode: apiData.sic_codes && apiData.sic_codes.length > 0 ? apiData.sic_codes[0] : undefined, // Taking the first SIC code
+      companyStatus: mappedStatus,
+      incorporationDate: apiData.date_of_creation || undefined,
+      nextAccountsDue: apiData.accounts?.next_due || undefined,
+      nextConfirmationStatementDue: apiData.confirmation_statement?.next_due || undefined,
+    };
+
+  } catch (err: unknown) { // Changed any to unknown
+    console.error('Exception fetching company details from Companies House API:', err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    toast.error(`Exception looking up company ${companyNumber} with Companies House API: ${errorMessage}`);
+    return {};
+  }
+};
+
 export default function ClientsPage() {
   const router = useRouter();
   const [isAddClientOpen, setIsAddClientOpen] = useState(false);
@@ -244,114 +605,77 @@ export default function ClientsPage() {
   const [sortBy, setSortBy] = useState<'name' | 'company' | 'status' | 'nextVat' | 'nextAccounts' | 'yearEnd'>('name');
   const [formData, setFormData] = useState<FormData>(initialClientFormData);
   const [clients, setClients] = useState<Client[]>([]);
-  const [allClientTasks, setAllClientTasks] = useState<ClientTask[]>([]); // Store all tasks
   const [loading, setLoading] = useState(true);
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [isAutoFilling, setIsAutoFilling] = useState(false);
+  const [alertTemplates, setAlertTemplates] = useState<AlertTemplate[]>([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
 
-  // Modified fetchClients to also get all client_tasks
-  const fetchClientsAndTasks = async () => {
-    setLoading(true);
+  // Modified fetchClients to also get all client_tasks and alert_templates
+  const fetchClientsAndTasks = useCallback(async () => {
+    setLoading(true); // For overall page load
+    setIsLoadingTemplates(true); // Explicitly set for template loading
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError || !session) {
-        console.error('Error getting session or user not logged in:', sessionError);
-        setClients([]);
-        toast.error('Authentication error. Please log in again.');
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        toast.error('User not authenticated.');
+        router.push('/login');
         return;
       }
 
-      // Fetch Clients
-      const { data: clientsData, error: clientsError } = await supabase.from('clients').select('*');
+      const { data: clientsData, error: clientsError } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('created_by', user.id) 
+        .order('client_name', { ascending: true });
+
       if (clientsError) throw clientsError;
 
-      // Fetch all Client Tasks
-      const { data: tasksData, error: tasksError } = await supabase.from('client_tasks').select('id, client_id, stage');
-      if (tasksError) throw tasksError;
-      setAllClientTasks(tasksData || []);
+      const clientIds = (clientsData || []).map(c => c.id);
+      let tasksData: ClientTask[] = [];
+      if (clientIds.length > 0) {
+        const { data: fetchedTasks, error: tasksError } = await supabase
+          .from('client_tasks')
+          .select('id, client_id, stage')
+          .in('client_id', clientIds);
+        if (tasksError) throw tasksError;
+        tasksData = fetchedTasks || [];
+      }
+      
+      setClients(mapClientData(clientsData || [], tasksData)); // Use mapClientData
 
-      const convertedClients = (clientsData || []).map((client: any) => {
-        let parsedRequiredDocuments = { bankStatements: false, receipts: false, payrollSummaries: false };
-        try {
-          if (client.required_documents && typeof client.required_documents === 'string') {
-            parsedRequiredDocuments = JSON.parse(client.required_documents);
-          } else if (typeof client.required_documents === 'object') {
-            parsedRequiredDocuments = client.required_documents;
-          }
-        } catch (e) { console.error("Failed to parse required_documents", e); }
+      // Fetch alert templates
+      const { data: templatesData, error: templatesError } = await supabase
+        .from('alert_templates')
+        .select('alert_type, message_template:body'); // Updated select statement
 
-        let parsedReminderSchedule = { vatReminderDays: 30, accountsReminderDays: 30, confirmationStatementReminderDays: 30 };
-        try {
-          if (client.reminder_schedule && typeof client.reminder_schedule === 'string') {
-            parsedReminderSchedule = JSON.parse(client.reminder_schedule);
-          } else if (typeof client.reminder_schedule === 'object') {
-            parsedReminderSchedule = client.reminder_schedule;
-          }
-        } catch (e) { console.error("Failed to parse reminder_schedule", e); }
-        
-        let parsedCustomAlerts = { missedReminders: false, documentOverdue: false };
-        try {
-          if (client.custom_alerts && typeof client.custom_alerts === 'string') {
-            parsedCustomAlerts = JSON.parse(client.custom_alerts);
-          } else if (typeof client.custom_alerts === 'object') {
-            parsedCustomAlerts = client.custom_alerts;
-          }
-        } catch (e) { console.error("Failed to parse custom_alerts", e); }
+      if (templatesError) {
+        console.error("Error fetching alert templates:", templatesError);
+        toast.error("Failed to load alert templates.");
+        setAlertTemplates([]); // Set to empty array on error
+      } else {
+        setAlertTemplates(templatesData || []);
+      }
 
-        return {
-          id: client.id,
-          clientName: client.client_name || '',
-          clientEmail: client.client_email || '',
-          clientPhone: client.client_phone || '',
-          clientRole: client.client_role || null,
-          preferredContactMethod: client.preferred_contact_method || 'email',
-          companyName: client.company_name || '',
-          companyNumber: client.company_number || '',
-          companyAddress: client.registered_office_address || '',
-          sicCode: client.sic_code || '',
-          companyStatus: client.company_status || 'active',
-          incorporationDate: client.incorporation_date || '',
-          yearEndDate: client.year_end_date || '',
-          nextAccountsDue: client.next_accounts_due || '',
-          nextConfirmationStatementDue: client.next_confirmation_statement_due || '',
-          vatFilingFrequency: client.vat_filing_frequency || 'quarterly',
-          nextVatDue: client.next_vat_due || '',
-          payrollDeadlines: client.payroll_deadlines || [],
-          corporationTaxDeadline: client.corporation_tax_deadline || '',
-          services: client.services || [],
-          engagementLetterStatus: client.engagement_letter_signed ? 'signed' : 'not_sent', // Assuming engagement_letter_signed maps to status
-          requiredDocuments: parsedRequiredDocuments,
-          originalTaskStatus: client.task_status || 'waiting', // Store original from DB
-          derivedTaskStatus: getClientTaskStatus(client.id, tasksData || []), // Compute new status
-          recentFiles: client.recent_files ? (typeof client.recent_files === 'string' ? JSON.parse(client.recent_files) : client.recent_files) : [],
-          lastInteractionNotes: client.last_interaction_notes || '',
-          reminderSchedule: parsedReminderSchedule,
-          customAlerts: parsedCustomAlerts,
-          automatedEmails: client.automated_emails !== undefined ? client.automated_emails : true,
-          lastYearTurnover: client.last_year_turnover || 0,
-          profitLoss: client.profit_loss || 0,
-          taxOwed: client.tax_owed || 0,
-          shareableLinkToken: client.shareable_link_token || '',
-          notes: client.notes || '',
-          meetingLog: client.meeting_log || [],
-          emailHistory: client.email_history || [],
-        };
-      });
-      setClients(convertedClients as Client[]); // Ensure type cast after map
-
-    } catch (error) {
-      console.error('Error fetching clients or tasks:', error);
-      toast.error('Failed to load client data. Please try again.');
+    } catch (err: unknown) { // Changed any to unknown
+      console.error("Error fetching clients and tasks:", err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to load data: ${errorMessage}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // This is for the overall page load
+      setIsLoadingTemplates(false); // Ensure this is called regardless of success/failure of template fetch
     }
-  };
+  }, [router]); // Removed eslint-disable and router is a valid dependency
 
   useEffect(() => {
     fetchClientsAndTasks();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Add dependencies if needed, e.g. if session changes should trigger refetch
+  }, [fetchClientsAndTasks]);
+
+  useEffect(() => {
+    // ... existing useEffect for alert templates ...
+  }, []);
 
   // Sort clients based on selected sort option
   const sortedClients = [...clients].sort((a, b) => {
@@ -382,104 +706,27 @@ export default function ClientsPage() {
     }));
   };
 
-  const handleAutoFillFromCompanyNumber = useCallback(async () => {
-    const companyNumberToLookup = formData.companyNumber?.trim();
-    if (!companyNumberToLookup) {
-      toast.warning('Please enter a Company Number first.');
-      return;
-    }
-
-    setIsAutoFilling(true);
-    let companyData: CompanyHouseData | null = null; // Initialize companyData as null
-
-    try {
-      console.log(`Looking up company number: ${companyNumberToLookup}`);
-      const { data, error } = await supabase
-        .from('companies_house_data') 
-        .select(
-          'company_name, company_number, reg_address_address_line1, reg_address_address_line2, reg_address_post_town, reg_address_county, reg_address_post_code, company_status, incorporation_date, sic_code_sic_text_1, ' + 
-          'accounts_next_due_date, conf_stmt_next_due_date' 
-        )
-        .eq('company_number', companyNumberToLookup)
-        .maybeSingle(); // Expect 0 or 1 result
-
-      if (error) {
-        console.error('Supabase lookup error:', error);
-        // Ensure error is thrown so it's caught by the catch block
-        throw new Error(`Database lookup failed: ${error.message}`); 
-      }
-      
-      // If no error, data is either CompanyHouseData or null
-      companyData = data as CompanyHouseData | null;
-
-      if (!companyData) {
-        toast.error(`Company number "${companyNumberToLookup}" not found in the database.`);
-      } else {
-        // Re-assert companyData is not null for TypeScript within this block scope
-        const data = companyData; 
-        console.log('Found company data:', data);
-        
-        const addressParts = [
-          data.reg_address_address_line1,
-          data.reg_address_address_line2,
-          data.reg_address_post_town,
-          data.reg_address_county,
-          data.reg_address_post_code
-        ];
-        const fullAddress = addressParts.filter(part => part && part.trim() !== '').join(', ');
-
-        setFormData(prev => ({
-          ...prev,
-          companyName: data.company_name || prev.companyName || '',
-          companyAddress: fullAddress || prev.companyAddress || '',
-          companyStatus: (data.company_status?.toLowerCase() === 'active' || data.company_status?.toLowerCase() === 'dormant' || data.company_status?.toLowerCase() === 'dissolved') 
-                         ? data.company_status.toLowerCase() as Client['companyStatus'] 
-                         : prev.companyStatus,
-          incorporationDate: data.incorporation_date || prev.incorporationDate || '',
-          sicCode: data.sic_code_sic_text_1 || prev.sicCode || '',
-          nextAccountsDue: data.accounts_next_due_date || prev.nextAccountsDue || '',
-          nextConfirmationStatementDue: data.conf_stmt_next_due_date || prev.nextConfirmationStatementDue || '',
-        }));
-
-        toast.success('Client details auto-filled from Companies House data!');
-      }
-
-    } catch (err: any) {
-      console.error('Auto-fill failed:', err);
-      toast.error(`Auto-fill failed: ${err.message || 'Unknown error'}`);
-    } finally {
-      setIsAutoFilling(false);
-    }
-  }, [formData.companyNumber]);
-
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     
-    if (type === 'checkbox') {
-      const { checked } = e.target as HTMLInputElement;
-      if (name.startsWith('requiredDocuments.')) {
-        const key = name.split('.')[1] as keyof Client['requiredDocuments'];
-        setFormData(prev => ({
-          ...prev,
-          requiredDocuments: { ...prev.requiredDocuments, [key]: checked }
-        }));
-      } else if (name.startsWith('customAlerts.')) {
-        const key = name.split('.')[1] as keyof Client['customAlerts'];
-        setFormData(prev => ({
-          ...prev,
-          customAlerts: { ...prev.customAlerts, [key]: checked }
-        }));
-      } else if (name === 'automatedEmails') {
-          setFormData(prev => ({
-              ...prev,
-              automatedEmails: checked
-          }));
-      }
-    } else if (name.startsWith('reminderSchedule.')) {
-      const key = name.split('.')[1] as keyof Client['reminderSchedule'];
+    if (name.startsWith('customAlerts.')) {
+      const key = name.split('.')[1];
+      const checked = (e.target as HTMLInputElement).checked;
       setFormData(prev => ({
         ...prev,
-        reminderSchedule: { ...prev.reminderSchedule, [key]: parseInt(value) || 0 }
+        customAlerts: { ...prev.customAlerts, [key]: checked }
+      }));
+    } else if (name === 'automatedEmails') {
+      setFormData(prev => ({
+        ...prev,
+        automatedEmails: (e.target as HTMLInputElement).checked
+      }));
+    } else if (type === 'checkbox' && name.startsWith('requiredDocuments.')) {
+      const key = name.split('.')[1] as keyof FormData['requiredDocuments'];
+      const checked = (e.target as HTMLInputElement).checked;
+      setFormData(prev => ({
+        ...prev,
+        requiredDocuments: { ...prev.requiredDocuments, [key]: checked }
       }));
     } else {
       setFormData(prev => ({
@@ -489,69 +736,123 @@ export default function ClientsPage() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError || !session) {
-        toast.error('You must be logged in to add clients. Please log in again.');
-        // Potentially redirect to login: router.push('/login');
+    setLoading(true);
+
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      toast.error('User not authenticated. Please log in again.');
+      setLoading(false);
+      router.push('/login');
+      return;
+    }
+    
+    // Ensure templates are loaded before submitting
+    if (isLoadingTemplates) {
+        toast.error("Templates are still loading, please wait and try again.");
+        setLoading(false);
         return;
-      }
+    }
 
-      const clientDataToSave = {
-        client_name: formData.clientName,
-        client_email: formData.clientEmail,
-        client_phone: formData.clientPhone,
-        client_role: formData.clientRole || null,
-        preferred_contact_method: formData.preferredContactMethod,
-        company_name: formData.companyName,
-        company_number: formData.companyNumber,
-        registered_office_address: formData.companyAddress,
-        sic_code: formData.sicCode,
-        company_status: formData.companyStatus,
-        incorporation_date: formData.incorporationDate || null,
-        year_end_date: formData.yearEndDate || null,
-        next_accounts_due: formData.nextAccountsDue || null,
-        next_confirmation_statement_due: formData.nextConfirmationStatementDue || null,
-        vat_filing_frequency: formData.vatFilingFrequency,
-        next_vat_due: formData.nextVatDue || null,
-        payroll_deadlines: formData.payrollDeadlines.filter(line => line.trim() !== ''),
-        corporation_tax_deadline: formData.corporationTaxDeadline || null,
-        services: formData.services,
-        engagement_letter_signed: formData.engagementLetterStatus === 'signed' ? true : (formData.engagementLetterStatus === 'pending' ? null : false),
-        required_documents: JSON.stringify(formData.requiredDocuments),
-        task_status: formData.taskStatus,
-        recent_files: formData.recentFiles,
-        last_interaction_notes: formData.lastInteractionNotes,
-        reminder_schedule: JSON.stringify(formData.reminderSchedule),
-        custom_alerts: JSON.stringify(formData.customAlerts),
-        automatedEmails: formData.automatedEmails,
-        last_year_turnover: formData.lastYearTurnover,
-        profit_loss: formData.profitLoss,
-        tax_owed: formData.taxOwed,
-        notes: formData.notes,
-        shareable_link_token: formData.shareableLinkToken || generateUUID(),
-        created_by: session.user.id,
-        updated_by: session.user.id,
-      };
-      
-      const { error } = await supabase
+    const clientDataToSave = {
+      client_name: formData.clientName,
+      client_email: formData.clientEmail,
+      client_phone: formData.clientPhone,
+      client_role: formData.clientRole || null,
+      preferred_contact_method: formData.preferredContactMethod,
+      company_name: formData.companyName,
+      company_number: formData.companyNumber,
+      registered_office_address: formData.companyAddress,
+      sic_code: formData.sicCode,
+      company_status: formData.companyStatus,
+      incorporation_date: formData.incorporationDate || null,
+      year_end_date: formData.yearEndDate || null,
+      next_accounts_due: formData.nextAccountsDue || null,
+      next_confirmation_statement_due: formData.nextConfirmationStatementDue || null,
+      vat_filing_frequency: formData.vatFilingFrequency,
+      next_vat_due: formData.nextVatDue || null,
+      payroll_deadlines: formData.payrollDeadlines.filter(line => line.trim() !== ''),
+      corporation_tax_deadline: formData.corporationTaxDeadline || null,
+      services: formData.services,
+      engagement_letter_signed: formData.engagementLetterStatus === 'signed' ? true : (formData.engagementLetterStatus === 'pending' ? null : false),
+      required_documents: JSON.stringify(formData.requiredDocuments),
+      task_status: formData.taskStatus,
+      recent_files: formData.recentFiles,
+      last_interaction_notes: formData.lastInteractionNotes,
+      custom_alerts: JSON.stringify(formData.customAlerts),
+      automated_emails: formData.automatedEmails,
+      last_year_turnover: formData.lastYearTurnover || 0,
+      profit_loss: formData.profitLoss,
+      tax_owed: formData.taxOwed,
+      notes: formData.notes,
+      shareable_link_token: formData.shareableLinkToken || generateUUID(),
+      created_by: user.id,
+      updated_by: user.id,
+    };
+
+    try {
+      // Save client data
+      const { data: newClient, error } = await supabase
         .from('clients')
-        .insert([clientDataToSave]);
+        .insert(clientDataToSave)
+        .select()
+        .single();
 
-      if (error) {
-        throw error;
+      if (error) throw error;
+
+      toast.success('Client added successfully!');
+      setIsAddClientOpen(false);
+      
+      // --- Auto-create alerts if enabled ---
+      if (newClient && formData.automatedEmails) { // Using automatedEmails flag to trigger alerts
+          console.log(`Automated emails enabled for ${newClient.client_name}. Creating alerts...`);
+          
+          const getTemplate = (type: string) => alertTemplates.find(t => t.alert_type === type)?.message_template || alertTemplates.find(t => t.alert_type === 'DEFAULT')?.message_template || '';
+
+          const accountsTemplate = getTemplate(AUTO_ALERT_TYPES.NEXT_ACCOUNTS_DUE);
+          if (accountsTemplate) {
+              await createClientAlert(newClient.id, AUTO_ALERT_TYPES.NEXT_ACCOUNTS_DUE, newClient.next_accounts_due, accountsTemplate);
+          }
+          
+          const confirmationTemplate = getTemplate(AUTO_ALERT_TYPES.NEXT_CONFIRMATION_STATEMENT_DUE);
+          if (confirmationTemplate) {
+              await createClientAlert(newClient.id, AUTO_ALERT_TYPES.NEXT_CONFIRMATION_STATEMENT_DUE, newClient.next_confirmation_statement_due, confirmationTemplate);
+          }
+          
+          const vatTemplate = getTemplate(AUTO_ALERT_TYPES.NEXT_VAT_DUE);
+          if (vatTemplate) {
+              await createClientAlert(newClient.id, AUTO_ALERT_TYPES.NEXT_VAT_DUE, newClient.next_vat_due, vatTemplate);
+          }
+          
+          const taxTemplate = getTemplate(AUTO_ALERT_TYPES.CORPORATION_TAX_DEADLINE);
+          if (taxTemplate) {
+              await createClientAlert(newClient.id, AUTO_ALERT_TYPES.CORPORATION_TAX_DEADLINE, newClient.corporation_tax_deadline, taxTemplate);
+          }
       }
       
-      toast.success('Client saved successfully!');
-      setIsAddClientOpen(false);
-      setFormData(initialClientFormData); // Reset form to initial state
-      fetchClientsAndTasks(); // Refresh the client list
+      // Refresh client list - MODIFIED
+      const { data: updatedClientsData, error: updatedClientsError } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('created_by', user.id) // Added filter by user ID
+        .order('created_at', { ascending: false });
+      if (updatedClientsError) throw updatedClientsError;
+      
+      const { data: tasksData, error: tasksError } = await supabase
+        .from('client_tasks')
+        .select('*'); // Consider if these tasks also need filtering by user or firm
+      if (tasksError) throw tasksError;
+      
+      // USE THE NEW mapClientData function
+      setClients(mapClientData(updatedClientsData || [], tasksData || []));
 
-    } catch (error: any) {
+    } catch (error: unknown) { // Changed any to unknown
       console.error('Error saving client:', error);
-      toast.error('Error saving client: ' + error.message);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.error(`Error saving client: ${errorMessage}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -568,22 +869,113 @@ export default function ClientsPage() {
     }
   };
 
-  const handleCsvSubmit = (e: React.FormEvent) => {
+  const handleCsvSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csvFile) {
-      alert('Please select a CSV file to upload.');
+      toast.error('Please select a CSV file to upload.');
       return;
     }
-    // TODO: Implement CSV parsing and upload logic
-    alert(`Selected CSV file: ${csvFile.name}`);
-    setIsUploadDialogOpen(false);
-    setCsvFile(null);
-    fetchClientsAndTasks(); // Corrected from fetchClients
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast.error('User not authenticated. Please log in again.');
+      router.push('/login');
+      return;
+    }
+
+    setLoading(true);
+
+    Papa.parse(csvFile, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        const rows = results.data as Array<{ clientName?: string; clientEmail?: string; companyNumber?: string }>;
+        let successfulUploads = 0;
+        let failedUploads = 0;
+
+        for (const row of rows) {
+          if (!row.clientName || !row.clientEmail || !row.companyNumber) {
+            toast.error(`Skipping row: Missing required fields (clientName, clientEmail, companyNumber). Row: ${JSON.stringify(row)}`);
+            failedUploads++;
+            continue;
+          }
+
+          try {
+            const companyDetails = await fetchCompanyDetailsByNumber(row.companyNumber); // This calls the outer function
+
+            const clientDataToSave = {
+              client_name: row.clientName,
+              client_email: row.clientEmail,
+              company_number: row.companyNumber,
+              company_name: companyDetails.companyName,
+              registered_office_address: companyDetails.companyAddress,
+              sic_code: companyDetails.sicCode,
+              company_status: companyDetails.companyStatus as Client['companyStatus'],
+              incorporation_date: companyDetails.incorporationDate,
+              client_phone: companyDetails.clientPhone || '',
+              client_role: companyDetails.clientRole || null,
+              preferred_contact_method: (companyDetails.preferredContactMethod || 'email') as Client['preferredContactMethod'],
+              year_end_date: companyDetails.yearEndDate || null,
+              next_accounts_due: companyDetails.nextAccountsDue || null,
+              next_confirmation_statement_due: companyDetails.nextConfirmationStatementDue || null,
+              vat_filing_frequency: (companyDetails.vatFilingFrequency || 'quarterly') as Client['vatFilingFrequency'],
+              next_vat_due: companyDetails.nextVatDue || null,
+              payroll_deadlines: companyDetails.payrollDeadlines || [],
+              corporation_tax_deadline: companyDetails.corporationTaxDeadline || null,
+              services: companyDetails.services || [],
+              engagement_letter_signed: companyDetails.engagementLetterStatus === 'signed' ? true : (companyDetails.engagementLetterStatus === 'pending' ? null : false),
+              required_documents: JSON.stringify(companyDetails.requiredDocuments || {}),
+              task_status: 'waiting' as Client['originalTaskStatus'],
+              recent_files: JSON.stringify(companyDetails.recentFiles || []),
+              last_interaction_notes: companyDetails.lastInteractionNotes || '',
+              custom_alerts: JSON.stringify(companyDetails.customAlerts || { missedReminders: false, documentOverdue: false }),
+              automated_emails: companyDetails.automatedEmails || false,
+              last_year_turnover: companyDetails.lastYearTurnover || 0,
+              profit_loss: companyDetails.profitLoss || 0,
+              tax_owed: companyDetails.taxOwed || 0,
+              notes: companyDetails.notes || '',
+              shareable_link_token: generateUUID(), // generateUUID is defined outside
+              created_by: user.id,
+              updated_by: user.id,
+            };
+
+            const { error: insertError } = await supabase
+              .from('clients')
+              .insert(clientDataToSave);
+
+            if (insertError) {
+              throw insertError;
+            }
+            successfulUploads++;
+          } catch (error: unknown) { // Changed any to unknown
+            failedUploads++;
+            console.error('Error processing row:', row, 'Error:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            toast.error(`Failed to upload client ${row.clientName || 'N/A'}: ${errorMessage}`);
+          }
+        }
+
+        if (successfulUploads > 0) {
+          toast.success(`${successfulUploads} client(s) uploaded successfully.`);
+        }
+        if (failedUploads > 0) {
+          toast.warning(`${failedUploads} client(s) failed to upload. Check console for details.`);
+        }
+
+        setIsUploadDialogOpen(false);
+        setCsvFile(null);
+        fetchClientsAndTasks();
+        setLoading(false);
+      },
+      error: (error: Error) => { // Changed any to Error
+        toast.error(`Error parsing CSV: ${error.message}`);
+        setLoading(false);
+      }
+    });
   };
 
   const handleDownloadTemplate = () => {
-    // Create a simple CSV template
-    const csvContent = 'clientName,clientEmail,clientPhone,clientRole,companyName,companyNumber,companyAddress,sicCode,companyStatus,incorporationDate\n';
+    const csvContent = 'clientName,clientEmail,companyNumber\n'; // Corrected template
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -593,7 +985,6 @@ export default function ClientsPage() {
     URL.revokeObjectURL(url);
   };
 
-  // Add this function to handle client selection
   const handleClientClick = (clientId: string) => {
     router.push(`/dashboard/clients/${clientId}`);
   };
@@ -603,60 +994,52 @@ export default function ClientsPage() {
     router.push(`/dashboard/tasks?clientId=${clientId}`);
   };
 
-  // Updated Grid View Rendering
-  const renderGridItem = (client: Client) => (
-    <Card 
-      key={client.id} 
-      className="hover:shadow-lg transition-shadow border-gray-200 flex flex-col justify-between"
-      // onClick={() => handleClientClick(client.id)} // Keep or remove if card content gets too busy with buttons
-    >
-      <CardHeader className="cursor-pointer" onClick={() => handleClientClick(client.id)}>
-        <div className="flex justify-between items-start">
-          <CardTitle className="text-xl text-primary font-semibold">{client.clientName}</CardTitle>
-          {/* We can use derivedTaskStatus for a more dynamic badge here too if preferred, or keep companyStatus */} 
-          <Badge 
-            variant={client.companyStatus === 'active' ? 'default' : 'secondary'}
-            className={client.companyStatus === 'active' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-900'}
-          >
-            {client.companyStatus} 
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="flex-grow cursor-pointer" onClick={() => handleClientClick(client.id)}>
-        <div className="space-y-3">
-          <div className="flex items-center space-x-2">
-            <Building2 className="h-4 w-4 text-primary flex-shrink-0" />
-            <span className="text-gray-900 truncate" title={client.companyName}>{client.companyName}</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Mail className="h-4 w-4 text-primary flex-shrink-0" />
-            <span className="text-gray-900 truncate" title={client.clientEmail}>{client.clientEmail}</span>
-          </div>
-          {/* Add other essential info as before, keeping it concise for card view */}
-          <div className="flex items-center space-x-2 pt-2">
-            <BarChart3 className="h-4 w-4 text-primary flex-shrink-0" />
-            <span className="text-sm font-medium text-gray-700">Status:</span>
-            <span className="text-sm text-gray-900 font-semibold truncate" title={client.derivedTaskStatus}>{client.derivedTaskStatus || 'N/A'}</span>
-          </div>
-        </div>
-      </CardContent>
-      <div className="p-4 border-t border-gray-100 mt-auto"> {/* Footer for actions */}
-        {(client.derivedTaskStatus === "No Active Tasks" || client.derivedTaskStatus === "Up to Date") && (
-          <Button 
-            size="sm"
-            className="w-full bg-secondary hover:bg-secondary/90 text-secondary-foreground"
-            onClick={(e) => { 
-              e.stopPropagation(); // Prevent card click if it has one
-              handleCreateTaskForClient(client.id); 
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" /> Create Task
-          </Button>
-        )}
-        {/* You can add other actions here like 'View Details' if the main card click is removed */}
-      </div>
-    </Card>
-  );
+  const handleAutoFillFromCompanyNumber = useCallback(async () => {
+    const companyNumberToLookup = formData.companyNumber?.trim();
+    if (!companyNumberToLookup) {
+      toast.warning('Please enter a Company Number first.');
+      return;
+    }
+
+    setIsAutoFilling(true);
+    const toastId = toast.loading(`Looking up company: ${companyNumberToLookup}...`);
+
+    try {
+      const companyData = await fetchCompanyDetailsByNumber(companyNumberToLookup);
+
+      if (companyData && Object.keys(companyData).length > 0 && companyData.companyName !== "Details not found") {
+        setFormData(prev => ({
+          ...prev,
+          companyName: companyData.companyName || prev.companyName,
+          companyAddress: companyData.companyAddress || prev.companyAddress,
+          sicCode: companyData.sicCode || prev.sicCode,
+          companyStatus: companyData.companyStatus || prev.companyStatus,
+          incorporationDate: companyData.incorporationDate || prev.incorporationDate,
+          nextAccountsDue: companyData.nextAccountsDue || prev.nextAccountsDue,
+          nextConfirmationStatementDue: companyData.nextConfirmationStatementDue || prev.nextConfirmationStatementDue,
+          // Do not overwrite clientName or clientEmail as they are not part of CH data
+        }));
+        toast.success(`Company details for ${companyData.companyName || companyNumberToLookup} auto-filled!`, { id: toastId });
+      } else if (companyData.companyName === "Details not found"){
+        // fetchCompanyDetailsByNumber already shows an info toast "No details found..."
+        // We can dismiss the loading toast here or let the info toast from the function handle it.
+        // For clarity, we might update the toast message specifically.
+        toast.dismiss(toastId); // Dismiss loading as info/error is handled by fetcher
+      } else {
+        // This case might occur if companyData is {} or some other error handled inside fetchCompanyDetailsByNumber
+        // fetchCompanyDetailsByNumber should have already shown an error toast in such cases.
+        // We might just dismiss the loading toast if it wasn't replaced.
+        toast.dismiss(toastId); // Dismiss if no specific error/info toast was shown by the function for this case
+      }
+    } catch (err: unknown) { // Changed any to unknown
+      // This catch is for unexpected errors during the process here, 
+      // not for errors during the fetch itself as fetchCompanyDetailsByNumber has its own try/catch.
+      console.error("Error in handleAutoFillFromCompanyNumber logic:", err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to auto-fill company details: ${errorMessage}`, { id: toastId });
+    }
+    setIsAutoFilling(false);
+  }, [formData.companyNumber, setFormData, setIsAutoFilling]);
 
   // Updated List View Rendering
   const renderListItem = (client: Client) => (
@@ -708,10 +1091,215 @@ export default function ClientsPage() {
   );
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-[#1a365d]">Clients</h1>
-        <div className="flex gap-2">
+    <div className="px-4 py-6 md:p-8 max-w-7xl mx-auto">
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a365d] tracking-tight">Clients</h1>
+          <p className="text-gray-500 mt-1">Manage your client relationships and information</p>
+        </div>
+        <div className="flex gap-3">
+          <Button
+            onClick={() => setIsUploadDialogOpen(true)}
+            variant="outline"
+            className="hover:bg-gray-50 transition-colors border-gray-200"
+          >
+            <Upload className="h-4 w-4 mr-2" />
+            Import CSV
+          </Button>
+          <Button
+            onClick={() => setIsAddClientOpen(true)}
+            className="bg-primary hover:bg-primary/90 text-white transition-all duration-200"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Client
+          </Button>
+        </div>
+      </div>
+
+      {/* Search & Filter Section */}
+      <div className="mb-6 p-5 bg-white rounded-xl shadow-sm border border-gray-100">
+        <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center">
+          <div className="relative flex-grow">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Search clients..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 h-10 border-gray-200 rounded-md w-full focus-visible:ring-primary"
+            />
+          </div>
+          
+          <Button 
+            variant="outline" 
+            className="flex items-center justify-center h-10 border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
+            onClick={fetchClientsAndTasks}
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {/* View Controls Section */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <div className="flex items-center gap-2 mb-3 sm:mb-0">
+          <Button
+            variant={viewMode === 'grid' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setViewMode('grid')}
+            className={`${viewMode === 'grid' ? 'bg-primary text-white' : 'border-gray-200 text-gray-700'} transition-all duration-200`}
+          >
+            <LayoutGrid className="h-4 w-4 mr-1" />
+            <span>Grid</span>
+          </Button>
+          <Button
+            variant={viewMode === 'list' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setViewMode('list')}
+            className={`${viewMode === 'list' ? 'bg-primary text-white' : 'border-gray-200 text-gray-700'} transition-all duration-200`}
+          >
+            <List className="h-4 w-4 mr-1" />
+            <span>List</span>
+          </Button>
+        </div>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <span className="text-gray-600 whitespace-nowrap">Sort by:</span>
+          <Select value={sortBy} onValueChange={(value: 'name' | 'company' | 'status' | 'nextVat' | 'nextAccounts' | 'yearEnd') => setSortBy(value)}>
+            <SelectTrigger className="w-full sm:w-[180px] border-gray-200 focus:ring-primary">
+              <SelectValue placeholder="Select sort option" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="name">Client Name</SelectItem>
+              <SelectItem value="company">Company Name</SelectItem>
+              <SelectItem value="status">Status</SelectItem>
+              <SelectItem value="nextVat">Next VAT Due</SelectItem>
+              <SelectItem value="nextAccounts">Next Accounts Due</SelectItem>
+              <SelectItem value="yearEnd">Year End Date</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Client List */}
+      {loading ? (
+        <div className="flex justify-center items-center py-16">
+          <div className="flex flex-col items-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mb-4"></div>
+            <p className="text-gray-500">Loading clients...</p>
+          </div>
+        </div>
+      ) : clients.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 gap-6 bg-white rounded-xl border border-dashed border-gray-200 p-8">
+          <div className="flex flex-col items-center">
+            <Building2 className="h-16 w-16 text-gray-300 mb-4" />
+            <div className="text-gray-500 text-lg font-medium">No clients found</div>
+            <p className="text-gray-400 text-center max-w-md mt-2">Get started by adding your first client or importing existing client data.</p>
+          </div>
+          <div className="flex gap-4">
+            <Button
+              variant="outline"
+              className="border-gray-200 hover:bg-gray-50 transition-colors"
+              onClick={() => setIsUploadDialogOpen(true)}
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Import CSV
+            </Button>
+            <Button
+              className="bg-primary hover:bg-primary/90 text-white transition-all duration-200"
+              onClick={() => setIsAddClientOpen(true)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add Client
+            </Button>
+          </div>
+        </div>
+      ) : viewMode === 'grid' ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {sortedClients.map((client) => (
+            <Card 
+              key={client.id} 
+              className="overflow-hidden border border-gray-200 hover:border-primary hover:shadow-md transition-all duration-200 cursor-pointer"
+              onClick={() => handleClientClick(client.id)}
+            >
+              <CardHeader className="p-5 pb-0">
+                <div className="flex justify-between items-start">
+                  <CardTitle className="text-[#1a365d] text-lg font-semibold line-clamp-1" title={client.clientName}>
+                    {client.clientName}
+                  </CardTitle>
+                  <Badge 
+                    className={`${getStatusColor(client.derivedTaskStatus || 'No Active Tasks')} text-xs`}
+                    title={client.derivedTaskStatus || 'No Active Tasks'}
+                  >
+                    {client.derivedTaskStatus || 'No Active Tasks'}
+                  </Badge>
+                </div>
+                <p className="text-gray-500 mt-1 line-clamp-1" title={client.companyName}>
+                  {client.companyName}
+                </p>
+              </CardHeader>
+              <CardContent className="p-5 pt-4">
+                <div className="space-y-3">
+                  <div className="flex items-center text-sm">
+                    <Mail className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
+                    <span className="text-gray-600 truncate" title={client.clientEmail}>{client.clientEmail}</span>
+                  </div>
+                  {client.clientPhone && (
+                    <div className="flex items-center text-sm">
+                      <Phone className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
+                      <span className="text-gray-600">{client.clientPhone}</span>
+                    </div>
+                  )}
+                  {client.nextVatDue && (
+                    <div className="flex items-center text-sm">
+                      <Calendar className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
+                      <span className="text-gray-600">
+                        VAT Due: {formatDate(client.nextVatDue)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                
+                {(client.derivedTaskStatus === "No Active Tasks" || client.derivedTaskStatus === "Up to Date") && (
+                  <Button 
+                    variant="outline"
+                    size="sm"
+                    className="mt-4 w-full text-primary border-primary/20 hover:bg-primary/5 hover:text-primary transition-colors"
+                    onClick={(e) => { 
+                      e.stopPropagation();
+                      handleCreateTaskForClient(client.id); 
+                    }}
+                  >
+                    <Plus className="h-3 w-3 mr-1" /> Create Task
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Client Name</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Company</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Status</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Email</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Next VAT</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Next Accounts</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {sortedClients.map(renderListItem)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Add Client Dialog */}
           <Dialog open={isAddClientOpen} onOpenChange={setIsAddClientOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -1206,64 +1794,9 @@ export default function ClientsPage() {
                             <Label className="text-gray-900 font-medium">Automations</Label>
                             <div className="grid grid-cols-2 gap-4">
                               <div className="space-y-2">
-                                <Label className="text-sm text-gray-600">Reminder Schedule (days before)</Label>
-                                <div className="grid grid-cols-3 gap-2">
-                                  <div>
-                                    <Label htmlFor="vatReminderDays" className="text-xs">VAT</Label>
-                                    <Input
-                                      id="vatReminderDays"
-                                      name="reminderSchedule.vatReminderDays"
-                                      type="number"
-                                      value={formData.reminderSchedule.vatReminderDays}
-                                      onChange={(e) => setFormData(prev => ({
-                                        ...prev,
-                                        reminderSchedule: {
-                                          ...prev.reminderSchedule,
-                                          vatReminderDays: parseInt(e.target.value)
-                                        }
-                                      }))}
-                                      className="border-gray-200 focus:border-[#1a365d] focus:ring-[#1a365d] text-gray-900"
-                                    />
-                                  </div>
-                                  <div>
-                                    <Label htmlFor="accountsReminderDays" className="text-xs">Accounts</Label>
-                                    <Input
-                                      id="accountsReminderDays"
-                                      name="reminderSchedule.accountsReminderDays"
-                                      type="number"
-                                      value={formData.reminderSchedule.accountsReminderDays}
-                                      onChange={(e) => setFormData(prev => ({
-                                        ...prev,
-                                        reminderSchedule: {
-                                          ...prev.reminderSchedule,
-                                          accountsReminderDays: parseInt(e.target.value)
-                                        }
-                                      }))}
-                                      className="border-gray-200 focus:border-[#1a365d] focus:ring-[#1a365d] text-gray-900"
-                                    />
-                                  </div>
-                                  <div>
-                                    <Label htmlFor="confirmationStatementReminderDays" className="text-xs">Confirmation</Label>
-                                    <Input
-                                      id="confirmationStatementReminderDays"
-                                      name="reminderSchedule.confirmationStatementReminderDays"
-                                      type="number"
-                                      value={formData.reminderSchedule.confirmationStatementReminderDays}
-                                      onChange={(e) => setFormData(prev => ({
-                                        ...prev,
-                                        reminderSchedule: {
-                                          ...prev.reminderSchedule,
-                                          confirmationStatementReminderDays: parseInt(e.target.value)
-                                        }
-                                      }))}
-                                      className="border-gray-200 focus:border-[#1a365d] focus:ring-[#1a365d] text-gray-900"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="space-y-2">
-                                <Label className="text-sm text-gray-600">Custom Alerts</Label>
+                                <Label className="text-sm text-gray-600">Standard Alerts</Label> {/* Changed label */} 
                                 <div className="space-y-2">
+                                  {/* REMOVE_START */}
                                   <div className="flex items-center space-x-2">
                                     <Switch
                                       id="missedReminders"
@@ -1333,6 +1866,8 @@ export default function ClientsPage() {
               </form>
             </DialogContent>
           </Dialog>
+
+      {/* CSV Upload Dialog */}
           <UploadDialog open={isUploadDialogOpen} onOpenChange={setIsUploadDialogOpen}>
             <UploadDialogTrigger asChild>
               <Button>
@@ -1362,85 +1897,41 @@ export default function ClientsPage() {
             </UploadDialogContent>
           </UploadDialog>
         </div>
-      </div>
-
-      {/* View Controls */}
-      <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-lg border border-gray-200">
-        <div className="flex items-center gap-2">
-          <Button
-            variant={viewMode === 'grid' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setViewMode('grid')}
-            className={viewMode === 'grid' ? 'bg-primary text-white' : 'border-gray-200'}
-          >
-            <LayoutGrid className="h-4 w-4 text-primary" />
-          </Button>
-          <Button
-            variant={viewMode === 'list' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setViewMode('list')}
-            className={viewMode === 'list' ? 'bg-primary text-white' : 'border-gray-200'}
-          >
-            <List className="h-4 w-4 text-primary" />
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-gray-900">Sort by:</span>
-          <Select value={sortBy} onValueChange={(value: 'name' | 'company' | 'status' | 'nextVat' | 'nextAccounts' | 'yearEnd') => setSortBy(value)}>
-            <SelectTrigger className="w-[180px] border-gray-200">
-              <SelectValue placeholder="Select sort option" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="name">Client Name</SelectItem>
-              <SelectItem value="company">Company Name</SelectItem>
-              <SelectItem value="status">Status</SelectItem>
-              <SelectItem value="nextVat">Next VAT Due</SelectItem>
-              <SelectItem value="nextAccounts">Next Accounts Due</SelectItem>
-              <SelectItem value="yearEnd">Year End Date</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* Client List */}
-      {loading ? (
-        <div className="text-center text-gray-500 py-12">Loading clients...</div>
-      ) : clients.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-12 gap-4">
-          <div className="text-gray-500 text-lg">No clients found. Get started by adding your first client!</div>
-          <Button
-            className="bg-primary hover:bg-[#2a4a7d] text-white px-6 py-3 rounded-lg flex items-center gap-2 shadow-md hover:shadow-lg transition-all"
-            onClick={() => setIsAddClientOpen(true)}
-          >
-            <Plus className="h-5 w-5" />
-            <span>Add Client</span>
-          </Button>
-        </div>
-      ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {sortedClients.map(renderGridItem)}
-        </div>
-      ) : (
-        <div className="overflow-x-auto border border-gray-200 rounded-lg">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Client Name</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Company Name</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Task Status</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Email</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Phone</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Next VAT Due</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Next Accounts Due</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sm:px-6">Year End Date</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {sortedClients.map(renderListItem)}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
   );
-} 
+}
+
+// Helper function to format date for display
+const formatDate = (dateString: string) => {
+  if (!dateString) return 'N/A';
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch { // Changed _ to an empty catch block
+    return dateString;
+  }
+};
+
+// Helper function to get appropriate status colors
+const getStatusColor = (status: string | undefined) => {
+  if (!status) return 'bg-gray-100 text-gray-800';
+  
+  switch (status) {
+    case 'Up to Date':
+    case 'No Active Tasks':
+      return 'bg-green-100 text-green-800';
+    case 'New Request / To Do':
+    case 'Information Gathering / Waiting on Client':
+      return 'bg-blue-100 text-blue-800';
+    case 'In Progress':
+    case 'Internal Review':
+    case 'Pending Client Approval':
+    case 'Ready to File / Submit':
+      return 'bg-amber-100 text-amber-800';
+    case 'Completed / Filed':
+      return 'bg-purple-100 text-purple-800';
+    case 'On Hold / Blocked':
+      return 'bg-red-100 text-red-800';
+    default:
+      return 'bg-gray-100 text-gray-800';
+  }
+}; 

@@ -5,9 +5,19 @@ import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
+interface Bucket {
+  id: string;
+  name: string;
+  owner: string | null;
+  public: boolean;
+  created_at?: string;
+  updated_at?: string;
+  file_size_limit?: number | null;
+  allowed_mime_types?: string[] | null;
+}
+
 export function StorageDebugger() {
-  const [buckets, setBuckets] = useState<any[]>([]);
-  const [policies, setPolicies] = useState<any[]>([]);
+  const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [authStatus, setAuthStatus] = useState<string>('Checking...');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +68,7 @@ export function StorageDebugger() {
               
             // Try to create a test directory
             const testDirPath = `test-${Date.now()}`;
-            const { data: uploadData, error: uploadError } = await supabase.storage
+            const { error: uploadError } = await supabase.storage
               .from(bucket.name)
               .upload(`${testDirPath}/.keep`, new Blob([''], { type: 'text/plain' }));
               

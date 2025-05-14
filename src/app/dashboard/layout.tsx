@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import Image from 'next/image';
 
 interface Profile {
   id: string;
@@ -44,7 +45,7 @@ export default function DashboardLayout({
         }
 
         setProfile(profileData);
-      } catch (error) {
+      } catch {
         setError('An error occurred while loading the dashboard');
       } finally {
         setLoading(false);
@@ -111,7 +112,9 @@ export default function DashboardLayout({
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-gray-200 flex flex-col py-8 px-4 min-h-screen shadow-sm">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold text-primary tracking-tight">AccFlow</h1>
+          <Link href="/" className="flex items-center gap-2 font-semibold px-4 lg:px-6">
+            <Image src="/logo.png" alt="AccFlow Logo" width={64} height={32} className="w-28 h-8" />
+          </Link>
         </div>
         <nav className="flex-1">
           <ul className="space-y-2">

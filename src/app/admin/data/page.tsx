@@ -156,8 +156,8 @@ export default function AdminDataPage() {
     }
   };
 
-  const cleanValue = (value: any, targetHeader: string): string => {
-    let strValue = String(value === null || value === undefined ? '' : value).trim();
+  const cleanValue = useCallback((value: string | number | null | undefined, targetHeader: string): string => {
+    const strValue = String(value === null || value === undefined ? '' : value).trim();
     const targetType = supabaseColumnTypes[targetHeader];
 
     if (targetType === 'date') {
@@ -203,7 +203,7 @@ export default function AdminDataPage() {
     
     // Default for other TEXT columns or unmapped ones: just trim.
     return strValue;
-  };
+  }, []);
 
 
   const handleCleanCSV = useCallback(() => {
@@ -238,14 +238,14 @@ export default function AdminDataPage() {
         const newHeaders = validOriginalHeaders.map(originalHeader => headerMapping[originalHeader] || originalHeader.toLowerCase().replace(/\W+/g, '_'));
         setCleanedHeaders(newHeaders);
 
-        const cleanedRows: any[][] = [];
+        const cleanedRows: string[][] = [];
         cleanedRows.push(newHeaders);
 
         const seenCompanyNumbers = new Set<string>();
-        const companyNumberCleanedHeader = 'company_number'; // The target cleaned header name
-        const companyStatusCleanedHeader = 'company_status'; // <-- Header name for status
-        let companyNumberIndex = newHeaders.indexOf(companyNumberCleanedHeader);
-        let companyStatusIndex = newHeaders.indexOf(companyStatusCleanedHeader); // <-- Find index for status
+        const companyNumberCleanedHeader = 'company_number';
+        const companyStatusCleanedHeader = 'company_status';
+        const companyNumberIndex = newHeaders.indexOf(companyNumberCleanedHeader);
+        const companyStatusIndex = newHeaders.indexOf(companyStatusCleanedHeader);
 
         if (companyNumberIndex === -1) {
             console.warn("`company_number` column not found in cleaned headers. De-duplication by company number will be skipped.");
@@ -254,7 +254,7 @@ export default function AdminDataPage() {
             console.warn("`company_status` column not found in cleaned headers. Filtering by status will be skipped.");
         }
 
-        (results.data as Record<string, any>[]).forEach(row => {
+        (results.data as Record<string, unknown>[]).forEach(row => {
           const newRow: string[] = [];
           let hasMeaningfulData = false;
           let currentCompanyNumber = '';
@@ -262,14 +262,14 @@ export default function AdminDataPage() {
 
           for (let i = 0; i < validOriginalHeaders.length; i++) {
             const originalHeader = validOriginalHeaders[i];
-            const targetHeader = newHeaders[i]; // Use the already mapped header
-            const cleanedVal = cleanValue(row[originalHeader], targetHeader);
+            const targetHeader = newHeaders[i];
+            const cleanedVal = cleanValue(row[originalHeader] as string | number | null | undefined, targetHeader);
             newRow.push(cleanedVal);
             if (cleanedVal !== '') hasMeaningfulData = true;
             if (targetHeader === companyNumberCleanedHeader) {
               currentCompanyNumber = cleanedVal;
             }
-            if (targetHeader === companyStatusCleanedHeader) { // <-- Store status value
+            if (targetHeader === companyStatusCleanedHeader) {
               currentCompanyStatus = cleanedVal;
             }
           }

@@ -2,7 +2,8 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({
+  console.log('MIDDLEWARE FUNCTION ENTERED - Path:', request.nextUrl.pathname); // Diagnostic log
+  const response = NextResponse.next({
     request: {
       headers: request.headers,
     },
@@ -41,46 +42,14 @@ export async function middleware(request: NextRequest) {
     console.log('Middleware - Session exists:', !!session)
     if (session) {
       console.log('Middleware - User email:', session.user.email)
-      let userRole = null; // Initialize userRole
-
-      // Fetch user's profile to check their role
-      console.log('Middleware - Fetching profile for user ID:', session.user.id)
-      const { data: profiles, error: profileError } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', session.user.id)
-        // Removed .single() to handle multiple/no rows gracefully
-
-      if (profileError) {
-        console.error('Middleware - Error fetching profiles:', profileError.message)
-        // Treat as non-admin for safety
-      } else if (!profiles || profiles.length === 0) {
-        console.log('Middleware - No profile found for user ID:', session.user.id)
-        // No profile means no role, treat as non-admin
-      } else if (profiles.length > 1) {
-        console.warn('Middleware - Multiple profiles found for user ID:', session.user.id, 'Using role from the first profile found, but this indicates a data issue.')
-        // This case should ideally not happen if 'id' is a unique primary key
-        // For safety, you might want to treat this as non-admin or investigate the duplicates.
-        // For now, we'll take the role from the first one found, but log a strong warning.
-        userRole = profiles[0].role
-        console.log('Middleware - User role (from first of multiple profiles):', userRole)
-      } else {
-        // Exactly one profile found
-        userRole = profiles[0].role
-        console.log('Middleware - User role from profile:', userRole)
-      }
-
-      // If user tries to access /admin, check their role
-      if (request.nextUrl.pathname.startsWith('/admin')) {
-        if (userRole !== 'admin') {
-          console.log(`Middleware - Access to /admin DENIED. User role: "${userRole}". Redirecting to dashboard.`)
-          const redirectUrl = new URL('/dashboard', request.url)
-          return NextResponse.redirect(redirectUrl)
-        } else {
-          console.log('Middleware - Admin access to /admin GRANTED.')
-          // Allow access, continue to the page by returning the original response or NextResponse.next()
-        }
-      }
+      // Role fetching logic was here, but we're simplifying as /admin is removed.
+      // If you reinstate role-based access for other routes, you'd re-add role fetching:
+      // let userRole = null;
+      // const { data: profiles, error: profileError } = await supabase
+      //   .from('profiles')
+      //   .select('role')
+      //   .eq('id', session.user.id)
+      // etc.
     }
 
     // Allow access to static files and API routes

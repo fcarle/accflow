@@ -42,7 +42,7 @@ export default function SignUpPage() {
               id: authData.user.id,
               email: email,
               company_name: companyName,
-              role: 'admin',
+              role: 'user',
             },
           ])
 
@@ -55,9 +55,10 @@ export default function SignUpPage() {
         toast.success('Sign up successful! Please check your email for verification.')
         router.push('/login')
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Signup error:', error)
-      setError(error.message || 'An error occurred during sign up')
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setError(errorMessage || 'An error occurred during sign up')
     } finally {
       setLoading(false)
     }

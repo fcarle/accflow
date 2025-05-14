@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
 import Link from 'next/link'
 
@@ -10,7 +9,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const router = useRouter()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -46,9 +44,10 @@ export default function LoginPage() {
       } else {
         throw new Error('No session established after login')
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Login error details:', error)
-      setError(error.message || 'An error occurred during login')
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setError(errorMessage || 'An error occurred during login')
     } finally {
       setLoading(false)
     }
@@ -116,7 +115,7 @@ export default function LoginPage() {
             href="/signup"
             className="font-medium text-indigo-600 hover:text-indigo-500"
           >
-            Don't have an account? Sign up
+            Don&apos;t have an account? Sign up
           </Link>
         </div>
       </div>

@@ -1,35 +1,43 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
+// import dynamic from 'next/dynamic'; // Keep if MarkerClusterGroup is still used by some other part, otherwise remove
 import { supabase } from '@/lib/supabase';
-import 'leaflet/dist/leaflet.css'; // Import Leaflet CSS
-import 'leaflet-draw/dist/leaflet.draw.css'; // CSS for leaflet-draw
-import { MapContainer, TileLayer, Marker, Popup, FeatureGroup, useMap } from 'react-leaflet';
-import L, { LatLngExpression, LeafletEvent, GeoJSON } from 'leaflet'; // Added LeafletEvent, GeoJSON
-import { EditControl } from 'react-leaflet-draw'; // For drawing
-import booleanPointInPolygon from '@turf/boolean-point-in-polygon'; // For map_area filtering
+// import 'leaflet/dist/leaflet.css'; // Remove if no Leaflet components remain
+// import 'leaflet-draw/dist/leaflet.draw.css'; // Remove if no leaflet-draw components remain
+// Leaflet-related imports to be removed if MapContainer and EditControl are fully gone:
+// import { MapContainer, TileLayer, Marker, Popup, FeatureGroup, useMapEvents } from 'react-leaflet';
+// import L, { LeafletEvent, GeoJSON } from 'leaflet'; 
+// import { EditControl } from 'react-leaflet-draw';
+// import { MarkerClusterGroup } // From dynamic import
+
+// Keep GeoJSON if saved searches of type 'map_area' are still being processed for filtering in list view
+import { GeoJSON } from 'leaflet'; 
+import booleanPointInPolygon from '@turf/boolean-point-in-polygon'; // For map_area filtering (if existing saved searches are supported)
 import distance from '@turf/distance'; // For address_radius filtering
 import { point as turfPoint } from '@turf/helpers'; // To create turf points for checks
 
-// Fix for default Leaflet marker icon issue with webpack
-// You might need to copy marker-icon.png, marker-icon-2x.png, and marker-shadow.png
-// to your public folder and adjust paths if they don't load correctly.
-// For now, trying a common fix:
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
-});
+// Remove dynamic import for MarkerClusterGroup if no map markers are displayed anymore
+// const MarkerClusterGroup = dynamic(() => import('react-leaflet-cluster'), {
+//   ssr: false,
+// });
 
-type Tab = 'List' | 'Map View' | 'Custom Save';
+// Remove L.Icon.Default fix if Leaflet is not used
+// delete (L.Icon.Default.prototype as any)._getIconUrl;
+// L.Icon.Default.mergeOptions({
+//   iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
+//   iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
+//   shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
+// });
+
+type Tab = 'List' | 'Custom Save';
 
 interface CompanyData {
   company_name: string | null;
   company_number: string;
   accounts_next_due_date: string | null;
   returns_next_due_date: string | null;
-  // For map view, we'll add address components and potentially lat/lng
   reg_address_address_line1?: string | null;
   reg_address_address_line2?: string | null;
   reg_address_post_town?: string | null;
@@ -39,10 +47,9 @@ interface CompanyData {
   longitude?: number;
 }
 
-// Interface for saved searches
 interface SavedSearchDefinition {
   type: 'map_area' | 'address_radius';
-  geoJson?: GeoJSON.FeatureCollection | GeoJSON.Feature; // For map_area
+  geoJson?: GeoJSON.FeatureCollection | GeoJSON.Feature; // For map_area (if supporting existing)
   address?: string; // For address_radius
   radiusKm?: number; // For address_radius
   center?: { lat: number; lng: number }; // For address_radius (geocoded address)
@@ -50,9 +57,9 @@ interface SavedSearchDefinition {
 
 interface SavedSearch {
   id: string;
-  user_id?: string | null; // Assuming nullable for now if no auth
+  user_id?: string | null;
   name: string;
-  search_type: 'map_area' | 'address_radius';
+  search_type: 'map_area' | 'address_radius'; // Keep 'map_area' if supporting existing
   definition: SavedSearchDefinition; 
   created_at: string;
 }
@@ -62,14 +69,13 @@ const MAPBOX_ACCESS_TOKEN = 'pk.eyJ1IjoiZmFiaWFuY2FybGUiLCJhIjoiY21hZjlmNGVsMDBj
 
 export default function NewLeadsPage() {
   const [activeTab, setActiveTab] = useState<Tab>('List');
-  const [loading, setLoading] = useState<boolean>(true); // Covers both list and map loading initially
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   
-  // State for List View
   const [leadCompanies, setLeadCompanies] = useState<CompanyData[]>([]);
   const getInitialEndDate = () => {
     const date = new Date();
-    date.setMonth(date.getMonth() + 1);
+    date.setDate(date.getDate() + 5);
     return date.toISOString().split('T')[0];
   };
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -77,123 +83,81 @@ export default function NewLeadsPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [totalLeads, setTotalLeads] = useState<number>(0);
 
-  // State for Map View
-  const [mapCompanies, setMapCompanies] = useState<CompanyData[]>([]);
-  const [mapLoading, setMapLoading] = useState<boolean>(false);
-  const [mapError, setMapError] = useState<string | null>(null);
-  const [mapCenter, setMapCenter] = useState<[number, number]>([51.505, -0.09]); // Default center (London)
-  const [mapZoom, setMapZoom] = useState<number>(6); // Default zoom
-  const [mapLoadingStage, setMapLoadingStage] = useState<'fetching' | 'geocoding' | 'idle'>('idle'); // New state for loading stage
+  const [specificAccountsDueStartDate, setSpecificAccountsDueStartDate] = useState<string>('');
+  const [specificAccountsDueEndDate, setSpecificAccountsDueEndDate] = useState<string>('');
+  const [specificConfirmationStatementStartDate, setSpecificConfirmationStatementStartDate] = useState<string>('');
+  const [specificConfirmationStatementEndDate, setSpecificConfirmationStatementEndDate] = useState<string>('');
+
   const geocodeCache = useRef<Record<string, { latitude: number; longitude: number }>>({});
-  const mapRef = useRef<L.Map | null>(null); // Ref for the map instance
 
-  // State for "Custom Save" tab
   const [customSearchName, setCustomSearchName] = useState<string>('');
-  const [customSearchType, setCustomSearchType] = useState<'map_area' | 'address_radius'>('map_area');
   const [customAddress, setCustomAddress] = useState<string>('');
-  const [customRadius, setCustomRadius] = useState<number>(5); // Default 5km
-  const [isDrawingForCustomSearch, setIsDrawingForCustomSearch] = useState<boolean>(false);
-  const [drawnShapeData, setDrawnShapeData] = useState<GeoJSON.FeatureCollection | GeoJSON.Feature | null>(null);
-  const featureGroupRef = useRef<L.FeatureGroup>(null); // To access drawn layers
-
+  const [customRadius, setCustomRadius] = useState<number>(5);
+  
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
   const [loadingSavedSearches, setLoadingSavedSearches] = useState<boolean>(false);
   const [errorSavedSearches, setErrorSavedSearches] = useState<string | null>(null);
 
-  // Ref to manage the currently drawn layer if we need to remove it before drawing a new one
-  const currentDrawnLayerRef = useRef<L.Layer | null>(null);
-
-  // New state for list filtering
   const [selectedSavedSearchId, setSelectedSavedSearchId] = useState<string | null>(null);
-  // Ref to store the fully filtered list when using custom search (for client-side pagination)
   const filteredLeadsRef = useRef<CompanyData[]>([]);
 
-  // New state for user's client company numbers
   const [clientCompanyNumbers, setClientCompanyNumbers] = useState<Set<string>>(new Set());
   const [loadingClientNumbers, setLoadingClientNumbers] = useState<boolean>(true);
   const [errorClientNumbers, setErrorClientNumbers] = useState<string | null>(null);
 
-  // New state for city filter
   const [cityFilter, setCityFilter] = useState<string>('');
 
-  // Fetch User's Client Company Numbers
   const fetchClientCompanyNumbers = useCallback(async () => {
     setLoadingClientNumbers(true);
     setErrorClientNumbers(null);
-    console.log("[ClientsFilter] Fetching client company numbers...");
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
-        console.warn("[ClientsFilter] User not logged in, cannot fetch client numbers.");
-        setClientCompanyNumbers(new Set()); // Ensure it's an empty set if no user
-        return; // Exit if no user
+        setClientCompanyNumbers(new Set());
+        return;
       }
-
       const { data, error: dbError } = await supabase
         .from('clients')
         .select('company_number')
         .eq('created_by', user.id)
-        .not('company_number', 'is', null); // Ignore clients without a company number
-
-      if (dbError) {
-        console.error("[ClientsFilter] Error fetching client numbers:", dbError);
-        throw dbError;
-      }
-
+        .not('company_number', 'is', null);
+      if (dbError) throw dbError;
       const numbers = new Set(data?.map(client => client.company_number).filter(Boolean) || []);
-      console.log(`[ClientsFilter] Found ${numbers.size} client company numbers for user ${user.id}.`);
       setClientCompanyNumbers(numbers);
-
-    } catch (e: any) {
-      console.error("[ClientsFilter] Error in fetchClientCompanyNumbers:", e);
-      setErrorClientNumbers("Failed to load client list for filtering: " + e.message);
-      setClientCompanyNumbers(new Set()); // Reset on error
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setErrorClientNumbers("Failed to load client list for filtering: " + errorMessage);
+      setClientCompanyNumbers(new Set());
     } finally {
       setLoadingClientNumbers(false);
     }
   }, []);
 
-  // Fetch existing saved searches
   const fetchSavedSearches = useCallback(async () => {
     setLoadingSavedSearches(true);
     setErrorSavedSearches(null);
-    console.log("[CustomSave] Fetching saved searches..."); // Log: Start fetching
     try {
       const { data, error: dbError } = await supabase
         .from('user_saved_searches')
         .select('*')
         .order('created_at', { ascending: false });
-
-      if (dbError) {
-        console.error("[CustomSave] Supabase error fetching saved searches:", dbError); // Log: DB Error
-        throw dbError;
-      }
-      console.log("[CustomSave] Fetched data from Supabase:", data); // Log: Raw data from Supabase
+      if (dbError) throw dbError;
       setSavedSearches(data || []);
-    } catch (e: any) {
-      console.error("[CustomSave] Error in fetchSavedSearches catch block:", e); // Log: Catch block error
-      setErrorSavedSearches("Failed to load saved searches. " + e.message);
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setErrorSavedSearches("Failed to load saved searches. " + errorMessage);
     } finally {
       setLoadingSavedSearches(false);
-      console.log("[CustomSave] Finished fetching saved searches."); // Log: Finish fetching
     }
   }, []);
 
-  // Add a useEffect to log when savedSearches state changes
-  useEffect(() => {
-    console.log("[CustomSave] savedSearches state updated:", savedSearches);
-  }, [savedSearches]);
-
-  // Fetch saved searches once on initial mount
   useEffect(() => {
     fetchSavedSearches();
-    fetchClientCompanyNumbers(); // Fetch client numbers on mount too
-  }, [fetchSavedSearches, fetchClientCompanyNumbers]); // Add new dependency
+    fetchClientCompanyNumbers();
+  }, [fetchSavedSearches, fetchClientCompanyNumbers]);
 
-  useEffect(() => {
-    const fetchListData = async () => {
-      if (loadingClientNumbers) return; // Wait for client numbers to load before fetching leads
-
+  const fetchListData = useCallback(async () => {
+    if (loadingClientNumbers) return;
       if (!startDate || !endDate) {
         setLeadCompanies([]);
         setTotalLeads(0);
@@ -203,48 +167,72 @@ export default function NewLeadsPage() {
       }
       setLoading(true);
       setError(null);
-      
       const lowerBoundDateQuery = startDate;
       const upperBoundDateQuery = endDate;
-      const page = currentPage -1;
-      const trimmedCityFilter = cityFilter.trim(); // Trim city filter
-
+    const page = currentPage - 1;
+    const trimmedCityFilter = cityFilter.trim();
       try {
         let potentialLeads: CompanyData[] = [];
         let totalPotentialLeads = 0;
+        
+        let queryBuilder; // Use a common variable for the query builder
 
         if (selectedSavedSearchId) {
-          const selectedSearch = savedSearches.find(s => s.id === selectedSavedSearchId);
-          if (!selectedSearch) throw new Error("Selected saved search not found.");
+          // const selectedSearch = savedSearches.find(s => s.id === selectedSavedSearchId); // This line should be removed or stay commented
+          // if (!selectedSearch) throw new Error("Selected saved search not found."); // This line should be removed or stay commented as the check is done with selectedSearchDetails
           
-          let query = supabase
+          queryBuilder = supabase
             .from('companies_house_data')
-            .select('*, reg_address_address_line1, reg_address_address_line2, reg_address_post_town, reg_address_county, reg_address_post_code')
-            .or(
-              `and(accounts_next_due_date.gte.${lowerBoundDateQuery},accounts_next_due_date.lte.${upperBoundDateQuery}),and(returns_next_due_date.gte.${lowerBoundDateQuery},returns_next_due_date.lte.${upperBoundDateQuery})`
-            )
-            .filter('company_status', 'eq', 'Active');
+            .select('*, reg_address_address_line1, reg_address_address_line2, reg_address_post_town, reg_address_county, reg_address_post_code');
+            // No count needed here as we fetch all and filter client-side for custom geo-searches for now.
+            // Date filtering for saved searches is more complex as it happens *after* initial fetch if geo-filtering applies.
+            // However, we can pre-filter by the general dates.
+          
+          queryBuilder = queryBuilder.or(`and(accounts_next_due_date.gte.${lowerBoundDateQuery},accounts_next_due_date.lte.${upperBoundDateQuery}),and(returns_next_due_date.gte.${lowerBoundDateQuery},returns_next_due_date.lte.${upperBoundDateQuery})`);
 
-          if (trimmedCityFilter) {
-            query = query.ilike('reg_address_post_town', `%${trimmedCityFilter}%`);
-          }
+        } else {
+          queryBuilder = supabase
+            .from('companies_house_data')
+            .select('*, reg_address_address_line1, reg_address_address_line2, reg_address_post_town, reg_address_county, reg_address_post_code', { count: 'exact' })
+            .or(`and(accounts_next_due_date.gte.${lowerBoundDateQuery},accounts_next_due_date.lte.${upperBoundDateQuery}),and(returns_next_due_date.gte.${lowerBoundDateQuery},returns_next_due_date.lte.${upperBoundDateQuery})`);
+        }
 
-          const { data: allCompanies, error: allCompaniesError } = await query;
+        // Apply specific Accounts Due Date Filter
+        if (specificAccountsDueStartDate && specificAccountsDueEndDate) {
+          queryBuilder = queryBuilder
+            .gte('accounts_next_due_date', specificAccountsDueStartDate)
+            .lte('accounts_next_due_date', specificAccountsDueEndDate);
+        }
 
+        // Apply specific Confirmation Statement Due Date Filter
+        if (specificConfirmationStatementStartDate && specificConfirmationStatementEndDate) {
+          queryBuilder = queryBuilder
+            .gte('returns_next_due_date', specificConfirmationStatementStartDate)
+            .lte('returns_next_due_date', specificConfirmationStatementEndDate);
+        }
+        
+        queryBuilder = queryBuilder.filter('company_status', 'eq', 'Active');
+
+        if (selectedSavedSearchId) {
+          // For saved searches, city filter is applied AFTER geofiltering if applicable
+          // If no geofiltering, it can be applied here
+           // const selectedSearch = savedSearches.find(s => s.id === selectedSavedSearchId); // This line is unused and will be removed.
+           // If saved search is not map_area or address_radius (future proofing), or if it is but city filter is relevant
+           if (trimmedCityFilter) {
+             queryBuilder = queryBuilder.ilike('reg_address_post_town', `%${trimmedCityFilter}%`);
+           }
+          const { data: allCompanies, error: allCompaniesError } = await queryBuilder;
           if (allCompaniesError) throw allCompaniesError;
 
-          if (!allCompanies || allCompanies.length === 0) {
-             potentialLeads = [];
-          } else {
-              potentialLeads = allCompanies.filter(company => 
-                  !clientCompanyNumbers.has(company.company_number)
-              );
-              console.log(`[ListFilter] ${allCompanies.length - potentialLeads.length} companies removed as existing clients.`);
-              
+          if (allCompanies && allCompanies.length > 0) {
+            potentialLeads = allCompanies.filter(company => !clientCompanyNumbers.has(company.company_number));
+            // Geographic filtering (if applicable for the saved search)
+            const selectedSearchDetails = savedSearches.find(s => s.id === selectedSavedSearchId);
+            if (selectedSearchDetails && (selectedSearchDetails.search_type === 'map_area' || selectedSearchDetails.search_type === 'address_radius')) {
               const geographicallyFilteredCompanies: CompanyData[] = [];
               for (const company of potentialLeads) {
                   let companyLatLng: { latitude: number; longitude: number } | undefined;
-                  const cacheKey = company.company_number;
+                  const cacheKey = company.company_number; 
                   if (geocodeCache.current[cacheKey]) {
                       companyLatLng = geocodeCache.current[cacheKey];
                   } else {
@@ -259,21 +247,18 @@ export default function NewLeadsPage() {
                                   companyLatLng = { latitude, longitude };
                                   geocodeCache.current[cacheKey] = companyLatLng;
                               } 
-                          } catch(geoError) {
-                              console.error(`[ListFilter] Error geocoding company ${company.company_number}:`, geoError);
-                          }
+                        } catch(geoError: unknown) { console.error(`Error geocoding in ListData: ${String(geoError)}`); }
                           await new Promise(resolve => setTimeout(resolve, 50)); 
                       }
                   }
-
                   if (companyLatLng) {
                       let isMatch = false;
                       const companyPoint = turfPoint([companyLatLng.longitude, companyLatLng.latitude]);
-                      if (selectedSearch.search_type === 'map_area' && selectedSearch.definition.geoJson) {
-                          try { isMatch = booleanPointInPolygon(companyPoint, selectedSearch.definition.geoJson as any); } catch (e) { console.error("[TF] PolygonErr", e); }
-                      } else if (selectedSearch.search_type === 'address_radius' && selectedSearch.definition.center && selectedSearch.definition.radiusKm) {
-                          const centerPoint = turfPoint([selectedSearch.definition.center.lng, selectedSearch.definition.center.lat]);
-                          try { const dist = distance(centerPoint, companyPoint, { units: 'kilometers' }); isMatch = dist <= selectedSearch.definition.radiusKm; } catch(e) { console.error("[TF] DistErr", e); }
+                      if (selectedSearchDetails.search_type === 'map_area' && selectedSearchDetails.definition.geoJson) {
+                          try { isMatch = booleanPointInPolygon(companyPoint, selectedSearchDetails.definition.geoJson as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>); } catch (e) { console.error("[TF] PolygonErr", e); }
+                      } else if (selectedSearchDetails.search_type === 'address_radius' && selectedSearchDetails.definition.center && selectedSearchDetails.definition.radiusKm) {
+                          const centerPoint = turfPoint([selectedSearchDetails.definition.center.lng, selectedSearchDetails.definition.center.lat]);
+                          try { const dist = distance(centerPoint, companyPoint, { units: 'kilometers' }); isMatch = dist <= selectedSearchDetails.definition.radiusKm; } catch(e) { console.error("[TF] DistErr", e); }
                       }
                       if (isMatch) {
                           geographicallyFilteredCompanies.push({ ...company, ...companyLatLng });
@@ -281,186 +266,99 @@ export default function NewLeadsPage() {
                   }
               }
               potentialLeads = geographicallyFilteredCompanies;
+            }
           }
-          totalPotentialLeads = potentialLeads.length;
-          filteredLeadsRef.current = potentialLeads;
-          const paginatedSlice = potentialLeads.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
-          setLeadCompanies(paginatedSlice);
-          setTotalLeads(totalPotentialLeads);
-
+          totalPotentialLeads = potentialLeads.length; // Total leads for custom search is the length of the filtered array
         } else {
-          filteredLeadsRef.current = []; 
+          // Standard search without a saved custom area
+          if (trimmedCityFilter) {
+            queryBuilder = queryBuilder.ilike('reg_address_post_town', `%${trimmedCityFilter}%`);
+          }
+          queryBuilder = queryBuilder.range(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE - 1);
           
-          let countQuery = supabase
-            .from('companies_house_data')
-            .select('*' , { count: 'exact', head: true })
-            .or(
-              `and(accounts_next_due_date.gte.${lowerBoundDateQuery},accounts_next_due_date.lte.${upperBoundDateQuery}),and(returns_next_due_date.gte.${lowerBoundDateQuery},returns_next_due_date.lte.${upperBoundDateQuery})`
-            )
-            .filter('company_status', 'eq', 'Active');
-
-          if (trimmedCityFilter) {
-             countQuery = countQuery.ilike('reg_address_post_town', `%${trimmedCityFilter}%`);
-          }
-          const { count, error: countError } = await countQuery;
-          if (countError) throw countError;
-          const unfilteredCount = count || 0; 
-
-          let dataQuery = supabase
-            .from('companies_house_data')
-            .select('company_name, company_number, accounts_next_due_date, returns_next_due_date, reg_address_address_line1, reg_address_post_town, reg_address_post_code')
-            .or(
-              `and(accounts_next_due_date.gte.${lowerBoundDateQuery},accounts_next_due_date.lte.${upperBoundDateQuery}),and(returns_next_due_date.gte.${lowerBoundDateQuery},returns_next_due_date.lte.${upperBoundDateQuery})`
-            )
-            .filter('company_status', 'eq', 'Active');
-
-          if (trimmedCityFilter) {
-            dataQuery = dataQuery.ilike('reg_address_post_town', `%${trimmedCityFilter}%`);
-          }
-          dataQuery = dataQuery.range(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE - 1);
-          const { data, error: dbError } = await dataQuery;
-
+          const { data, error: dbError, count } = await queryBuilder;
           if (dbError) throw dbError;
-
-          let finalLeads: CompanyData[] = [];
           if (data) {
-            const nonClientLeads = data.filter(company => 
-                !clientCompanyNumbers.has(company.company_number)
-            );
-            
-            finalLeads = nonClientLeads.map(company => ({
-              ...company,
-              accounts_next_due_date: company.accounts_next_due_date && !isNaN(new Date(company.accounts_next_due_date).getTime()) ? company.accounts_next_due_date : null,
-              returns_next_due_date: company.returns_next_due_date && !isNaN(new Date(company.returns_next_due_date).getTime()) ? company.returns_next_due_date : null,
-            }));
+            potentialLeads = data.filter(company => !clientCompanyNumbers.has(company.company_number));
           }
-          setLeadCompanies(finalLeads as CompanyData[]);
-          setTotalLeads(unfilteredCount);
+          totalPotentialLeads = count ?? 0;
         }
-      } catch (e: any) {
-        console.error("Error fetching list lead companies:", e);
-        setError("Failed to load new leads for list. " + e.message);
-        setLeadCompanies([]);
-        setTotalLeads(0);
-        filteredLeadsRef.current = [];
+
+        filteredLeadsRef.current = potentialLeads; 
+        setLeadCompanies(potentialLeads.slice(0, ITEMS_PER_PAGE)); 
+        setTotalLeads(totalPotentialLeads);
+      } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setError("Failed to load leads. " + errorMessage);
       } finally {
         setLoading(false);
       }
-    };
+  }, [startDate, endDate, currentPage, clientCompanyNumbers, loadingClientNumbers, cityFilter, selectedSavedSearchId, savedSearches, geocodeCache, specificAccountsDueStartDate, specificAccountsDueEndDate, specificConfirmationStatementStartDate, specificConfirmationStatementEndDate]);
 
-    const fetchMapDataAndGeocode = async () => {
-       if (loadingClientNumbers) return; // Wait for client numbers
-       
-       if (!startDate || !endDate) {
-         setMapCompanies([]);
-         setMapLoading(false);
-         setMapLoadingStage('idle');
-         return;
-       }
-       setMapLoading(true);
-       setMapError(null);
-       setMapLoadingStage('fetching');
-       
-       const lowerBoundDateQuery = startDate;
-       const upperBoundDateQuery = endDate;
-       const trimmedCityFilter = cityFilter.trim(); // Trim city filter
+  const previousDepsRef = useRef({
+    startDate: '',
+    endDate: '',
+    cityFilter: '',
+    clientCompanyNumbers: new Set<string>(),
+    selectedSavedSearchId: null as string | null,
+    specificAccountsDueStartDate: '',
+    specificAccountsDueEndDate: '',
+    specificConfirmationStatementStartDate: '',
+    specificConfirmationStatementEndDate: '',
+  });
 
-       try {
-         let query = supabase
-           .from('companies_house_data')
-           .select('*, reg_address_address_line1, reg_address_address_line2, reg_address_post_town, reg_address_county, reg_address_post_code')
-           .or(
-             `and(accounts_next_due_date.gte.${lowerBoundDateQuery},accounts_next_due_date.lte.${upperBoundDateQuery}),and(returns_next_due_date.gte.${lowerBoundDateQuery},returns_next_due_date.lte.${upperBoundDateQuery})`
-           )
-           .filter('company_status', 'eq', 'Active');
-
-         if (trimmedCityFilter) {
-            query = query.ilike('reg_address_post_town', `%${trimmedCityFilter}%`);
-         }
-         
-         const { data: companiesFromDb, error: dbError } = await query;
-
-         if (dbError) throw dbError;
-         
-         setMapLoadingStage('geocoding');
-
-         const newMapCompanies: CompanyData[] = [];
-         if (companiesFromDb && companiesFromDb.length > 0) {
-           const potentialMapLeads = companiesFromDb.filter(company => 
-               !clientCompanyNumbers.has(company.company_number)
-           );
-           console.log(`[MapFilter] ${companiesFromDb.length - potentialMapLeads.length} companies removed as existing clients.`);
-
-           for (const company of potentialMapLeads) {
-             let companyLatLng: { latitude: number; longitude: number } | undefined;
-             const cacheKey = company.company_number;
-             if (geocodeCache.current[cacheKey]) {
-                 companyLatLng = geocodeCache.current[cacheKey];
-             } else {
-                 const addressParts = [company.reg_address_address_line1, company.reg_address_address_line2, company.reg_address_post_town, company.reg_address_county, company.reg_address_post_code].filter(Boolean).join(', ');
-                 if (addressParts.trim()) {
-                     try {
-                         const geocodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressParts)}.json?access_token=${MAPBOX_ACCESS_TOKEN}&limit=1`;
-                         const response = await fetch(geocodeUrl);
-                         const geoData = await response.json();
-                         if (geoData.features && geoData.features.length > 0) {
-                             const [longitude, latitude] = geoData.features[0].center;
-                             companyLatLng = { latitude, longitude };
-                             geocodeCache.current[cacheKey] = companyLatLng;
-                         }
-                     } catch(geoError) {
-                         console.error(`Error geocoding address for company ${company.company_name}: ${geoError}`);
-                     }
-                     await new Promise(resolve => setTimeout(resolve, 200)); 
-                 }
-             }
-             
-             if (companyLatLng) {
-                newMapCompanies.push({ ...company, ...companyLatLng });
-             }
-           }
-         }
-         setMapCompanies(newMapCompanies);
-         if (newMapCompanies.length > 0) {
-            const firstValidCompany = newMapCompanies.find(c => c.latitude && c.longitude);
-            if (firstValidCompany && firstValidCompany.latitude && firstValidCompany.longitude) {
-                 setMapCenter([firstValidCompany.latitude, firstValidCompany.longitude]);
-                 setMapZoom(10);
-            }
-          }
-
-       } catch (e: any) {
-         console.error("Error fetching or geocoding map data:", e);
-         setMapError("Failed to load or geocode map data. " + e.message);
-       } finally {
-         setMapLoading(false);
-         setMapLoadingStage('idle');
-       }
+  useEffect(() => {
+    const dependenciesChanged = () => {
+        const currentDeps = {
+            startDate,
+            endDate,
+            cityFilter,
+            clientCompanyNumbers,
+            selectedSavedSearchId,
+            specificAccountsDueStartDate,
+            specificAccountsDueEndDate,
+            specificConfirmationStatementStartDate,
+            specificConfirmationStatementEndDate,
+        };
+        const prev = previousDepsRef.current;
+        if (
+            prev.startDate !== currentDeps.startDate || 
+            prev.endDate !== currentDeps.endDate || 
+            prev.cityFilter !== currentDeps.cityFilter || 
+            prev.clientCompanyNumbers !== currentDeps.clientCompanyNumbers || 
+            prev.selectedSavedSearchId !== currentDeps.selectedSavedSearchId ||
+            prev.specificAccountsDueStartDate !== currentDeps.specificAccountsDueStartDate ||
+            prev.specificAccountsDueEndDate !== currentDeps.specificAccountsDueEndDate ||
+            prev.specificConfirmationStatementStartDate !== currentDeps.specificConfirmationStatementStartDate ||
+            prev.specificConfirmationStatementEndDate !== currentDeps.specificConfirmationStatementEndDate
+        ) {
+            previousDepsRef.current = currentDeps;
+            return true;
+        }
+        return false;
     };
 
     if (activeTab === 'List') {
-      if(mapLoading) setMapLoading(false); // Stop map loading if switching to list
-      fetchListData();
-    } else if (activeTab === 'Map View') {
-      if(loading) setLoading(false); // Stop list loading if switching to map
-      fetchMapDataAndGeocode();
+        if (dependenciesChanged() || leadCompanies.length === 0 && !loading) { // Fetch if deps changed or list is empty and not loading
+            fetchListData();
+        }
     } else if (activeTab === 'Custom Save') {
       if(loading) setLoading(false);
-      if(mapLoading) setMapLoading(false);
-      // Saved searches are fetched on mount
     }
-  }, [activeTab, startDate, endDate, currentPage, selectedSavedSearchId, savedSearches, clientCompanyNumbers, loadingClientNumbers, cityFilter]); // Added cityFilter dependency
+  }, [activeTab, startDate, endDate, cityFilter, clientCompanyNumbers, selectedSavedSearchId, fetchListData, leadCompanies.length, loading]);
 
-  // Effect for client-side pagination when using custom filter
   useEffect(() => {
     if (activeTab === 'List' && selectedSavedSearchId) {
-       // When page changes and a custom filter is active, re-slice the stored full list
-       const page = currentPage - 1;
-       const paginatedSlice = filteredLeadsRef.current.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
+       const pageToUse = currentPage -1;
+       const paginatedSlice = filteredLeadsRef.current.slice(pageToUse * ITEMS_PER_PAGE, (pageToUse + 1) * ITEMS_PER_PAGE);
        setLeadCompanies(paginatedSlice);
+       // Update totalLeads when custom filter is active and page changes
+       setTotalLeads(filteredLeadsRef.current.length);
+    } else if (activeTab === 'List' && !selectedSavedSearchId) {
+      // When custom filter is cleared, fetchListData will be called by the other useEffect due to selectedSavedSearchId dependency change.
+      // It will reset totalLeads correctly.
     }
-     // No need to re-run if selectedSavedSearchId becomes null, the main effect handles that.
-  }, [currentPage, activeTab, selectedSavedSearchId]); 
+  }, [currentPage, activeTab, selectedSavedSearchId, specificAccountsDueStartDate, specificAccountsDueEndDate, specificConfirmationStatementStartDate, specificConfirmationStatementEndDate, filteredLeadsRef]); 
 
   const totalPages = Math.ceil(totalLeads / ITEMS_PER_PAGE);
 
@@ -469,42 +367,11 @@ export default function NewLeadsPage() {
   };
 
   const handleNextPage = () => {
-    setCurrentPage(prev => Math.min(totalPages, prev + 1));
+    setCurrentPage(prev => Math.min(totalPages || 1, prev + 1)); // Ensure totalPages isn't 0
   };
   
   const handleTabChange = (tab: Tab) => {
-    setIsDrawingForCustomSearch(false); // Stop drawing mode when switching tabs
     setActiveTab(tab);
-  };
-
-  // --- Handlers for Custom Save Drawing ---
-  const handleDefineAreaOnMap = () => {
-    setDrawnShapeData(null); // Clear previous shape
-    if (currentDrawnLayerRef.current && featureGroupRef.current) {
-        featureGroupRef.current.removeLayer(currentDrawnLayerRef.current);
-        currentDrawnLayerRef.current = null;
-    }
-    setIsDrawingForCustomSearch(true);
-    setActiveTab('Map View'); // Switch to map to draw
-  };
-
-  const handleConfirmDrawnArea = () => {
-    setIsDrawingForCustomSearch(false);
-    // drawnShapeData should already be set by _onCreated
-    setActiveTab('Custom Save'); // Switch back to custom save form
-  };
-  
-  const _onCreated = (e: LeafletEvent & { layer: L.Layer & { toGeoJSON: () => GeoJSON.Feature | GeoJSON.FeatureCollection }}) => {
-    if (featureGroupRef.current) {
-        if (currentDrawnLayerRef.current) {
-            featureGroupRef.current.removeLayer(currentDrawnLayerRef.current);
-        }
-        const drawnLayer = e.layer;
-        featureGroupRef.current.addLayer(drawnLayer);
-        currentDrawnLayerRef.current = drawnLayer;
-        setDrawnShapeData(drawnLayer.toGeoJSON());
-        // console.log("Shape drawn:", drawnLayer.toGeoJSON()); // Keep for debugging if needed
-    }
   };
 
   const handleSaveCustomSearch = async () => {
@@ -512,285 +379,327 @@ export default function NewLeadsPage() {
       alert("Please enter a name for your custom search.");
       return;
     }
-
-    let searchDefinition: SavedSearchDefinition;
-
-    if (customSearchType === 'map_area') {
-      if (!drawnShapeData) {
-        alert("Please define an area on the map first.");
-        return;
-      }
-      searchDefinition = {
-        type: 'map_area',
-        geoJson: drawnShapeData
-      };
-    } else { // address_radius
-      if (!customAddress.trim()) {
-        alert("Please enter an address for the radius search.");
-        return;
-      }
-      if (!customRadius || customRadius <= 0) {
-        alert("Please enter a valid radius (greater than 0 km).");
-        return;
-      }
-
-      // Geocode the address for address_radius type
-      let centerCoords: { lat: number; lng: number } | undefined = undefined;
-      const cachedCoords = geocodeCache.current[customAddress.toLowerCase().trim()]; // Use a consistent key for address cache
-
-      if (cachedCoords) {
-        centerCoords = { lat: cachedCoords.latitude, lng: cachedCoords.longitude };
-      } else {
-        try {
-          setLoading(true); // Use main loading indicator for this potentially slow operation
-          const geocodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(customAddress)}.json?access_token=${MAPBOX_ACCESS_TOKEN}&limit=1`;
-          const response = await fetch(geocodeUrl);
-          const geoData = await response.json();
-          if (geoData.features && geoData.features.length > 0) {
-            const [longitude, latitude] = geoData.features[0].center;
-            centerCoords = { lat: latitude, lng: longitude };
-            geocodeCache.current[customAddress.toLowerCase().trim()] = { latitude, longitude }; // Cache it
-          } else {
-            alert("Could not geocode the provided address. Please check it and try again.");
-            setLoading(false);
-            return;
-          }
-        } catch (e) {
-          console.error("Error geocoding address for saved search:", e);
-          alert("An error occurred while geocoding the address.");
-          setLoading(false);
-          return;
-        } finally {
-          setLoading(false);
-        }
-      }
-      
-      searchDefinition = {
-        type: 'address_radius',
-        address: customAddress,
-        radiusKm: customRadius,
-        center: centerCoords
-      };
+    if (!customAddress.trim()) {
+      alert("Please enter an address for the radius search.");
+      return;
+    }
+    if (!customRadius || customRadius <= 0) {
+      alert("Please enter a valid radius (greater than 0 km).");
+      return;
     }
 
+    let centerCoords: { lat: number; lng: number } | undefined = undefined;
+    const cachedAddressKey = customAddress.toLowerCase().trim();
+    if (geocodeCache.current[cachedAddressKey]) {
+      centerCoords = { lat: geocodeCache.current[cachedAddressKey].latitude, lng: geocodeCache.current[cachedAddressKey].longitude };
+    } else {
+      try {
+        setLoading(true);
+        const geocodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(customAddress)}.json?access_token=${MAPBOX_ACCESS_TOKEN}&limit=1`;
+        const response = await fetch(geocodeUrl);
+        const geoData = await response.json();
+        if (geoData.features && geoData.features.length > 0) {
+          const [longitude, latitude] = geoData.features[0].center;
+          centerCoords = { lat: latitude, lng: longitude };
+          geocodeCache.current[cachedAddressKey] = { latitude, longitude };
+        } else {
+          alert("Could not geocode the provided address. Please check it and try again.");
+          setLoading(false);
+          return;
+        }
+      } catch (e) {
+        console.error("Error geocoding address for saved search:", e);
+        alert("An error occurred while geocoding the address.");
+        setLoading(false);
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+    
+    const searchDefinition: SavedSearchDefinition = {
+      type: 'address_radius',
+      address: customAddress,
+      radiusKm: customRadius,
+      center: centerCoords
+    };
+
     try {
-      setLoading(true); // Indicate saving process
-      // const { data: { user } } = await supabase.auth.getUser(); // Uncomment if using auth for user_id
-      
+      setLoading(true);
       const { error: insertError } = await supabase
         .from('user_saved_searches')
         .insert({
-          // user_id: user?.id, // Uncomment if using auth
           name: customSearchName,
-          search_type: customSearchType,
+          search_type: 'address_radius',
           definition: searchDefinition, 
         });
-
       if (insertError) throw insertError;
-
       alert('Custom search saved successfully!');
-      fetchSavedSearches(); // Refresh the list
-      // Clear form
+      fetchSavedSearches();
       setCustomSearchName('');
-      setCustomSearchType('map_area');
-      setDrawnShapeData(null);
       setCustomAddress('');
       setCustomRadius(5);
-      if (currentDrawnLayerRef.current && featureGroupRef.current) {
-        featureGroupRef.current.removeLayer(currentDrawnLayerRef.current);
-        currentDrawnLayerRef.current = null;
-      }
-
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Error saving custom search:", e);
-      alert("Failed to save custom search: " + e.message);
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      alert("Failed to save custom search: " + errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- Delete Saved Search Handler ---
   const handleDeleteSavedSearch = async (searchId: string, searchName: string) => {
     if (!window.confirm(`Are you sure you want to delete the saved search "${searchName}"?`)) {
       return;
     }
     try {
-      // setLoading(true); // Optional: add specific loading state for delete if needed
       const { error: deleteError } = await supabase
         .from('user_saved_searches')
         .delete()
         .eq('id', searchId);
-
       if (deleteError) throw deleteError;
-
-      // alert('Search deleted successfully!'); // Or use a toast notification
-      fetchSavedSearches(); // Refresh the list
-
-      // If the deleted search was selected in the filter, reset the filter
+      fetchSavedSearches();
       if (selectedSavedSearchId === searchId) {
          setSelectedSavedSearchId(null);
+         setCurrentPage(1); // Reset to page 1 when active filter is deleted
       }
-
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Error deleting saved search:", e);
-      alert("Failed to delete saved search: " + e.message);
-    } finally {
-      // setLoading(false);
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      alert("Failed to delete saved search: " + errorMessage);
     }
   };
 
-  // Display loading/error for client numbers if relevant
-  if (loadingClientNumbers && activeTab !== 'Custom Save') { // Only show blocking loader outside custom save tab maybe?
-      return <div className="container mx-auto p-4 text-center">Loading client data...</div>; // Or a spinner
+  if (loadingClientNumbers && activeTab !== 'Custom Save') {
+      return <div className="container mx-auto p-4 text-center">Loading client data...</div>;
   }
   if (errorClientNumbers) {
       return <div className="container mx-auto p-4 text-center text-red-500">Error loading client data: {errorClientNumbers}</div>;
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-2">New Leads</h1>
-      <p className="text-sm text-gray-600 mb-4"> 
-        Add companies to your <a href="/dashboard/clients" className="text-indigo-600 hover:underline">Clients list</a> to hide them from this shared New Leads view. This helps prevent other accountants from contacting your clients.
-      </p>
+    <div className="container mx-auto px-4 py-6 max-w-7xl">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold text-gray-800">New Leads</h1>
+        <p className="mt-2 text-gray-600"> 
+          Add companies to your <Link href="/dashboard/clients" className="text-indigo-600 hover:underline font-medium">Clients list</Link> to hide them from this shared New Leads view. This helps prevent other accountants from contacting your clients.
+        </p>
+      </div>
 
-      <div className="mb-4 border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-          {['List', 'Map View', 'Custom Save'].map((tabName) => (
-          <button
+      <div className="mb-6 bg-white rounded-xl shadow-sm">
+        <nav className="flex" aria-label="Tabs">
+          {['List', 'Custom Save'].map((tabName) => (
+            <button
               key={tabName}
               onClick={() => handleTabChange(tabName as Tab)}
-            className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`px-6 py-4 text-sm font-medium transition-colors ${
                 activeTab === tabName
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
+                ? 'text-indigo-600 border-b-2 border-indigo-600'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              }`}
+            >
               {tabName}
-          </button>
+            </button>
           ))}
         </nav>
       </div>
       
-      {/* Date Filters - Placed above tab content so it applies to both */}
-      <div className="mb-6 p-4 border rounded-md bg-gray-50 flex flex-wrap gap-4 items-center">
-        <div>
-          <label htmlFor="start-date" className="block text-sm font-medium text-gray-700 mb-1">Start Date:</label>
-          <input 
-            type="date" 
-            id="start-date"
-            value={startDate}
-            onChange={(e) => {
-              setStartDate(e.target.value);
-              setCurrentPage(1); // Reset page on filter change
-            }}
-            className="p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
-          />
-        </div>
-        <div>
-          <label htmlFor="end-date" className="block text-sm font-medium text-gray-700 mb-1">End Date:</label>
-          <input 
-            type="date" 
-            id="end-date"
-            value={endDate}
-            onChange={(e) => {
-              setEndDate(e.target.value);
-              setCurrentPage(1); // Reset page on filter change
-            }}
-            min={startDate}
-            className="p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
-          />
-        </div>
-        
-        {/* New City Filter Input */}
-        <div>
-           <label htmlFor="city-filter" className="block text-sm font-medium text-gray-700 mb-1">City:</label>
-           <input 
-              type="text" 
-              id="city-filter"
-              value={cityFilter}
-              onChange={(e) => {
-                setCityFilter(e.target.value);
-                setCurrentPage(1); // Reset page on filter change
-              }}
-              placeholder="e.g., London"
-              className="mt-1 p-2 block w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-           />
-        </div>
-        
-        {/* New Custom Search Filter Dropdown (Only visible if saved searches exist and list tab is active?) - Let's show always for simplicity first */}
-        {activeTab === 'List' && (
+      <div className="mb-6 p-5 border rounded-xl shadow-sm bg-white">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
-            <label htmlFor="custom-filter" className="block text-sm font-medium text-gray-700 mb-1">Custom Filter:</label>
-            <select 
-              id="custom-filter"
-              value={selectedSavedSearchId ?? ''} // Use empty string for "None"
+            <label htmlFor="start-date" className="block text-sm font-medium text-gray-700 mb-1">Overall Due From</label>
+            <input 
+              type="date" 
+              id="start-date"
+              value={startDate}
               onChange={(e) => {
-                  setSelectedSavedSearchId(e.target.value || null); // Set to null if empty string
-                  setCurrentPage(1); // Reset page on filter change
+                setStartDate(e.target.value);
+                setCurrentPage(1);
               }}
-              disabled={loadingSavedSearches} // Disable while loading searches
-              className="mt-1 p-2 block w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm bg-white disabled:bg-gray-100"
+              className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="end-date" className="block text-sm font-medium text-gray-700 mb-1">Overall Due To</label>
+            <input 
+              type="date" 
+              id="end-date"
+              value={endDate}
+              onChange={(e) => {
+                setEndDate(e.target.value);
+                setCurrentPage(1);
+              }}
+              min={startDate}
+              className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          
+          <div>
+            <label htmlFor="specific-accounts-due-start-date" className="block text-sm font-medium text-gray-700 mb-1">Accounts Due From (Specific)</label>
+            <input 
+              type="date" 
+              id="specific-accounts-due-start-date"
+              value={specificAccountsDueStartDate}
+              onChange={(e) => {
+                setSpecificAccountsDueStartDate(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="specific-accounts-due-end-date" className="block text-sm font-medium text-gray-700 mb-1">Accounts Due To (Specific)</label>
+            <input 
+              type="date" 
+              id="specific-accounts-due-end-date"
+              value={specificAccountsDueEndDate}
+              onChange={(e) => {
+                setSpecificAccountsDueEndDate(e.target.value);
+                setCurrentPage(1);
+              }}
+              min={specificAccountsDueStartDate}
+              className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          
+          <div>
+            <label htmlFor="specific-confirmation-due-start-date" className="block text-sm font-medium text-gray-700 mb-1">Conf. Stmt Due From (Specific)</label>
+            <input 
+              type="date" 
+              id="specific-confirmation-due-start-date"
+              value={specificConfirmationStatementStartDate}
+              onChange={(e) => {
+                setSpecificConfirmationStatementStartDate(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="specific-confirmation-due-end-date" className="block text-sm font-medium text-gray-700 mb-1">Conf. Stmt Due To (Specific)</label>
+            <input 
+              type="date" 
+              id="specific-confirmation-due-end-date"
+              value={specificConfirmationStatementEndDate}
+              onChange={(e) => {
+                setSpecificConfirmationStatementEndDate(e.target.value);
+                setCurrentPage(1);
+              }}
+              min={specificConfirmationStatementStartDate}
+              className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+
+          <div>
+             <label htmlFor="city-filter" className="block text-sm font-medium text-gray-700 mb-1">City</label>
+             <input 
+                type="text" 
+                id="city-filter"
+                value={cityFilter}
+                onChange={(e) => {
+                  setCityFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder="e.g., London"
+                className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+             />
+          </div>
+          
+          <div>
+            <label htmlFor="saved-search-filter" className="block text-sm font-medium text-gray-700 mb-1">Custom Area Filter</label>
+            <select
+              id="saved-search-filter"
+              value={selectedSavedSearchId || ''}
+              onChange={(e) => {
+                setSelectedSavedSearchId(e.target.value || null);
+                setCurrentPage(1);
+              }}
+              className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+              disabled={activeTab !== 'List'} // Disable if not on List tab
             >
-              <option value="">None - Use Date Range Only</option>
+              <option value="">All Locations</option>
               {savedSearches.map(search => (
-                <option key={search.id} value={search.id}>
-                  {search.name} ({search.search_type === 'map_area' ? 'Map Area' : 'Address + Radius'})
-                </option>
+                <option key={search.id} value={search.id}>{search.name}</option>
               ))}
             </select>
-            {loadingSavedSearches && <span className="text-xs text-gray-500 ml-2">Loading filters...</span>}
           </div>
-        )}
+        </div>
       </div>
 
       <div>
         {activeTab === 'List' && (
           <div>
-            {/* <h2 className="text-xl font-semibold mb-4">List View</h2> */} {/* Title already present or implicit */}
-            {loading && <p>Loading new leads...</p>}
-            {error && <p className="text-red-500">{error}</p>}
+            {loading && (
+              <div className="flex justify-center items-center py-12">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+              </div>
+            )}
+            {error && <div className="p-4 bg-red-50 text-red-700 rounded-lg mb-4">{error}</div>}
             {!loading && !error && leadCompanies.length === 0 && (
-              <p>No companies found matching the criteria{selectedSavedSearchId ? ' for the selected custom filter' : ''} in the date range.</p>
+              <div className="bg-gray-50 p-8 rounded-xl text-center">
+                <p className="text-gray-600">No companies found matching the criteria{selectedSavedSearchId ? ' for the selected custom filter' : ''} in the date range.</p>
+              </div>
             )}
             {!loading && !error && leadCompanies.length > 0 && (
               <>
-                <ul className="space-y-4 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
                   {leadCompanies.map((company) => {
-                    // Construct address string for display
                     const displayAddress = [
                         company.reg_address_address_line1,
                         company.reg_address_post_town,
                         company.reg_address_post_code
                     ].filter(Boolean).join(', ');
-
                     return (
-                      <li key={company.company_number} className="p-4 border rounded-md shadow-sm bg-white">
-                        <h3 className="text-lg font-semibold text-primary">{company.company_name || 'N/A'}</h3>
-                        {/* <p className="text-sm text-gray-600">Company Number: {company.company_number}</p> */}{/* REMOVED Company Number */}
+                      <div key={company.company_number} className="p-5 border rounded-lg shadow-sm bg-white hover:shadow-md transition-shadow">
+                        <h3 className="text-lg font-semibold text-indigo-700 mb-2">{company.company_name || 'N/A'}</h3>
                         {displayAddress && (
-                           <p className="text-sm text-gray-600">{displayAddress}</p> 
+                           <div className="flex items-start mb-2">
+                             <svg className="h-5 w-5 text-gray-500 mr-2 mt-0.5 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                               <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                               <circle cx="12" cy="10" r="3"></circle>
+                             </svg>
+                             <p className="text-sm text-gray-600">{displayAddress}</p> 
+                           </div>
                         )}
-                        {company.accounts_next_due_date && (
-                          <p className="text-sm text-gray-700">
-                            Next Accounts Due: {new Date(company.accounts_next_due_date).toLocaleDateString()}
-                          </p>
-                        )}
-                        {company.returns_next_due_date && (
-                          <p className="text-sm text-gray-700">
-                            Next Confirmation Statement Due: {new Date(company.returns_next_due_date).toLocaleDateString()}
-                          </p>
-                        )}
-                      </li>
+                        <div className="space-y-1 mt-3">
+                          {company.accounts_next_due_date && (
+                            <div className="flex items-start">
+                              <svg className="h-5 w-5 text-gray-500 mr-2 mt-0.5 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="16" y1="2" x2="16" y2="6"></line>
+                                <line x1="8" y1="2" x2="8" y2="6"></line>
+                                <line x1="3" y1="10" x2="21" y2="10"></line>
+                              </svg>
+                              <p className="text-sm text-gray-700">
+                                <span className="font-medium">Next Accounts Due:</span> {new Date(company.accounts_next_due_date).toLocaleDateString()}
+                              </p>
+                            </div>
+                          )}
+                          {company.returns_next_due_date && (
+                            <div className="flex items-start">
+                              <svg className="h-5 w-5 text-gray-500 mr-2 mt-0.5 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                <polyline points="14 2 14 8 20 8"></polyline>
+                                <line x1="16" y1="13" x2="8" y2="13"></line>
+                                <line x1="16" y1="17" x2="8" y2="17"></line>
+                                <polyline points="10 9 9 9 8 9"></polyline>
+                              </svg>
+                              <p className="text-sm text-gray-700">
+                                <span className="font-medium">Next Confirmation Statement Due:</span> {new Date(company.returns_next_due_date).toLocaleDateString()}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     );
                   })}
-                </ul>
-                {totalPages > 1 && (
-                  <div className="flex justify-between items-center mt-6">
+                </div>
+                {totalPages > 0 && (
+                  <div className="flex justify-between items-center mt-6 bg-white p-4 rounded-lg shadow-sm">
                     <button 
                       onClick={handlePrevPage} 
                       disabled={currentPage === 1}
-                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-md hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                       Previous
                     </button>
@@ -799,8 +708,8 @@ export default function NewLeadsPage() {
                     </span>
                     <button 
                       onClick={handleNextPage} 
-                      disabled={currentPage === totalPages}
-                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={currentPage === totalPages || totalLeads === 0}
+                      className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-md hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                       Next
                     </button>
@@ -810,215 +719,117 @@ export default function NewLeadsPage() {
             )}
           </div>
         )}
-        {activeTab === 'Map View' && (
-          <div>
-            {/* <h2 className="text-xl font-semibold mb-2">Map View</h2> */} {/* Title already present or implicit */}
-            {mapLoading && (
-              <div className="flex flex-col items-center justify-center p-8 text-gray-600">
-                <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-                <p>
-                  {mapLoadingStage === 'fetching' && 'Fetching company data...'}
-                  {mapLoadingStage === 'geocoding' && 'Geocoding addresses...'}
-                  {mapLoadingStage === 'idle' && 'Initializing map...'} {/* Fallback text */}
-                </p>
-              </div>
-            )}
-            {mapError && <p className="text-red-500">{mapError}</p>}
-            
-            {isDrawingForCustomSearch && (
-                <div className="my-2 p-2 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded">
-                    <p>Drawing mode active: Draw a shape on the map to define your custom area.</p>
-                    <button 
-                        onClick={handleConfirmDrawnArea}
-                        className="mt-2 px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm"
-                    >
-                        Confirm Drawn Area & Return to Setup
-                    </button>
-                </div>
-            )}
-
-            {(!mapLoading && !mapError && mapCompanies.length === 0 && !isDrawingForCustomSearch) && ( // Check !isDrawing... so it doesn't show if map is just for drawing
-              <p>No companies to display on the map for the selected date range, or geocoding failed for all.</p>
-            )}
-            {/* Render MapContainer if not mapLoading OR if isDrawing (to allow drawing on empty map) */}
-            {(!mapLoading || isDrawingForCustomSearch) && !mapError && (
-              <MapContainer ref={mapRef} center={mapCenter} zoom={mapZoom} style={{ height: '600px', width: '100%' }} whenReady={() => { console.log("Map is ready."); /* Map instance is in mapRef.current */ }}>
-                <TileLayer
-                  url={`https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=${MAPBOX_ACCESS_TOKEN}`}
-                  attribution='&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> &copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors'
-                />
-                <FeatureGroup ref={featureGroupRef}> {/* FeatureGroup to hold drawn layers and EditControl */}
-                  {isDrawingForCustomSearch && (
-                    <EditControl
-                      position="topright"
-                      onCreated={_onCreated}
-                      // onEdited, onDeleted can be added later if needed
-                      draw={{
-                        rectangle: true,
-                        polygon: true,
-                        circle: true,
-                        circlemarker: false,
-                        marker: false,
-                        polyline: false,
-                      }}
-                      edit={{
-                        // edit and remove are true by default, can configure if needed
-                        // featureGroup: featureGroupRef.current // This is problematic here, layers are added to it directly
-                      }}
-                    />
-                  )}
-                </FeatureGroup>
-                
-                {/* Display existing map markers (companies) only if not in drawing mode, or refine later */}
-                {!isDrawingForCustomSearch && mapCompanies.map((company) => {
-                  if (company.latitude && company.longitude) {
-                    // Construct address string for display
-                    const displayAddress = [
-                        company.reg_address_address_line1,
-                        company.reg_address_post_town,
-                        company.reg_address_post_code
-                    ].filter(Boolean).join(', ');
-                    return (
-                      <Marker key={company.company_number} position={[company.latitude, company.longitude]}>
-                        <Popup>
-                          <b>{company.company_name || 'N/A'}</b><br />
-                          {/* Company No: {company.company_number}<br /> */}{/* REMOVED Company Number */}
-                          {displayAddress && <>{displayAddress}<br /></>}
-                          {company.accounts_next_due_date && <>Next Acc Due: {new Date(company.accounts_next_due_date).toLocaleDateString()}<br /></>}
-                          {company.returns_next_due_date && <>Next Conf Stmt Due: {new Date(company.returns_next_due_date).toLocaleDateString()}</>}
-                        </Popup>
-                      </Marker>
-                    );
-                  }
-                  return null;
-                })}
-              </MapContainer>
-            )}
-          </div>
-        )}
+        
         {activeTab === 'Custom Save' && (
           <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-semibold mb-3">Create New Custom Search</h2>
-              <div className="p-4 border rounded-md bg-white space-y-4">
+            <div className="bg-white rounded-xl shadow-sm p-6">
+              <h2 className="text-xl font-semibold mb-4 text-gray-800">Create New Custom Search</h2>
+              <div className="space-y-5">
                 <div>
-                  <label htmlFor="custom-search-name" className="block text-sm font-medium text-gray-700">Search Name:</label>
+                  <label htmlFor="custom-search-name" className="block text-sm font-medium text-gray-700 mb-1">Search Name</label>
                   <input 
                     type="text" 
                     id="custom-search-name"
                     value={customSearchName}
                     onChange={(e) => setCustomSearchName(e.target.value)}
-                    className="mt-1 p-2 block w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                     placeholder="e.g., My North London Area"
                   />
                 </div>
                 
-                <fieldset>
-                  <legend className="text-sm font-medium text-gray-700">Search Type:</legend>
-                  <div className="mt-2 space-y-2 sm:space-y-0 sm:flex sm:space-x-4">
-                    <div className="flex items-center">
-                      <input 
-                        id="map_area" 
-                        name="customSearchType" 
-                        type="radio" 
-                        value="map_area"
-                        checked={customSearchType === 'map_area'}
-                        onChange={() => { setCustomSearchType('map_area'); setDrawnShapeData(null); }}
-                        className="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300" 
-                      />
-                      <label htmlFor="map_area" className="ml-2 block text-sm text-gray-900">Define Area on Map</label>
-                    </div>
-                    <div className="flex items-center">
-                      <input 
-                        id="address_radius" 
-                        name="customSearchType" 
-                        type="radio" 
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Search Type</label>
+                  <div className="flex space-x-4">
+                    <label className="inline-flex items-center">
+                      <input
+                        type="radio"
+                        className="form-radio text-indigo-600"
+                        name="search-type"
                         value="address_radius"
-                        checked={customSearchType === 'address_radius'}
-                        onChange={() => setCustomSearchType('address_radius')}
-                        className="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300" 
+                        checked={true} // Should always be checked
+                        readOnly 
                       />
-                      <label htmlFor="address_radius" className="ml-2 block text-sm text-gray-900">Address + Radius</label>
-                    </div>
+                      <span className="ml-2">Address Radius</span>
+                    </label>
                   </div>
-                </fieldset>
+                </div>
 
-                {customSearchType === 'map_area' && (
-                  <div className="mt-4 space-y-2">
-                    <button 
-                      onClick={handleDefineAreaOnMap}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
-                    >
-                      {drawnShapeData ? 'Redefine Area on Map' : 'Define Area on Map'}
-                    </button>
-                    {drawnShapeData && (
-                      <p className="text-sm text-green-600">Area defined on map. You can rename and save it now.</p>
-                    )}
-                  </div>
-                )}
-
-                {customSearchType === 'address_radius' && (
-                  <div className="mt-4 space-y-4">
+                {true && (
+                  <div className="space-y-4">
                     <div>
-                      <label htmlFor="custom-address" className="block text-sm font-medium text-gray-700">Address:</label>
+                      <label htmlFor="custom-address" className="block text-sm font-medium text-gray-700 mb-1">Address</label>
                       <input 
                         type="text" 
                         id="custom-address"
                         value={customAddress}
                         onChange={(e) => setCustomAddress(e.target.value)}
-                        className="mt-1 p-2 block w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                         placeholder="e.g., 123 Main St, London"
                       />
                     </div>
                     <div>
-                      <label htmlFor="custom-radius" className="block text-sm font-medium text-gray-700">Radius (km):</label>
+                      <label htmlFor="custom-radius" className="block text-sm font-medium text-gray-700 mb-1">Radius (km)</label>
                       <input 
-                        type="number" 
+                        type="number"
                         id="custom-radius"
                         value={customRadius}
+                        onChange={(e) => setCustomRadius(Number(e.target.value))}
                         min="1"
-                        onChange={(e) => setCustomRadius(parseFloat(e.target.value))}
-                        className="mt-1 p-2 block w-1/3 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        max="50" // You can adjust max radius if needed
+                        className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                       />
                     </div>
                   </div>
                 )}
-                <button 
-                  onClick={handleSaveCustomSearch}
-                  className="w-full px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                >
-                  Save Custom Search
-                </button>
+
+                <div className="pt-2">
+                  <button 
+                    onClick={handleSaveCustomSearch}
+                    disabled={!customSearchName || !customAddress || !customRadius || customRadius <= 0 || loading}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {loading ? 'Saving...' : 'Save Custom Search'}
+                  </button>
+                </div>
               </div>
             </div>
-
-            <div>
-              <h2 className="text-xl font-semibold mb-3">Your Saved Searches</h2>
-              <p className="text-sm text-gray-500 mb-3"> {/* Added instruction text */} 
-                Use the filter dropdown in the 'List' tab to view leads based on a saved search.
-              </p>
-              {loadingSavedSearches && <p>Loading saved searches...</p>}
-              {errorSavedSearches && <p className="text-red-500">{errorSavedSearches}</p>}
-              {!loadingSavedSearches && !errorSavedSearches && savedSearches.length === 0 && (
-                <p className="text-gray-500">You haven't saved any custom searches yet.</p>
+            
+            <div className="bg-white rounded-xl shadow-sm p-6">
+              <h2 className="text-xl font-semibold mb-4 text-gray-800">Saved Searches</h2>
+              {loadingSavedSearches && (
+                <div className="flex justify-center items-center py-6">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-500"></div>
+                </div>
               )}
+              {errorSavedSearches && <div className="p-4 bg-red-50 text-red-700 rounded-lg mb-4">{errorSavedSearches}</div>}
+              
+              {!loadingSavedSearches && !errorSavedSearches && savedSearches.length === 0 && (
+                <p className="text-gray-600 py-4">No saved searches yet. Create one above.</p>
+              )}
+              
               {!loadingSavedSearches && !errorSavedSearches && savedSearches.length > 0 && (
                 <ul className="space-y-3">
                   {savedSearches.map(search => (
-                    <li key={search.id} className="p-3 border rounded-md bg-white flex justify-between items-center">
+                    <li key={search.id} className="p-4 border border-gray-200 rounded-lg flex justify-between items-center">
                       <div>
-                        <p className="font-medium">{search.name}</p>
-                        <p className="text-sm text-gray-600">Type: {search.search_type === 'map_area' ? 'Map Area' : 'Address + Radius'}</p>
+                        <h3 className="font-medium text-gray-800">{search.name}</h3>
+                        <p className="text-sm text-gray-600">
+                          {search.search_type === 'map_area' ? 'Map Area (Legacy)' : 'Address Radius'} {/* Clarify legacy map areas */}
+                          {search.search_type === 'address_radius' && search.definition.address && 
+                            `: ${search.definition.address} (${search.definition.radiusKm}km)`
+                          }
+                           {search.search_type === 'map_area' && <span className="text-xs text-gray-500"> (Cannot create new map areas)</span>}
+                        </p>
                       </div>
-                      <div>
-                        {/* REMOVED View Leads button */}
-                        <button 
-                          onClick={() => handleDeleteSavedSearch(search.id, search.name)} // Added onClick
-                          className="text-sm text-red-600 hover:text-red-800 disabled:opacity-50 disabled:cursor-not-allowed" // Removed 'disabled' attribute
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => handleDeleteSavedSearch(search.id, search.name)}
+                        className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-md transition-colors"
+                        title="Delete this saved search"
+                      >
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -1029,4 +840,4 @@ export default function NewLeadsPage() {
       </div>
     </div>
   );
-} 
+}

@@ -44,8 +44,9 @@ async function listClientFiles(clientId: string): Promise<string[]> {
                   }
               }
           }
-      } catch(listError: any) {
-           console.error(`API Route: Error listing files in category ${categoryPath}:`, listError.message);
+      } catch(listError: unknown) {
+           const errorMessage = listError instanceof Error ? listError.message : String(listError);
+           console.error(`API Route: Error listing files in category ${categoryPath}:`, errorMessage);
       }
   }
   console.log(`API Route: Found ${filePaths.length} files for client ${clientId}.`);
@@ -72,9 +73,10 @@ async function extractTextFromFileBuffer(buffer: Buffer, filePath: string): Prom
                 extractedContent = JSON.stringify(records, null, 2);
             }
             console.log(`API Route: Parsed CSV. Original records: ${records.length}. Content length after potential truncation: ${extractedContent.length}`);
-        } catch (csvError: any) {
-            console.error(`API Route: CSV Parsing Error for ${filePath}:`, csvError.message);
-            extractedContent = `[CSV parsing failed: ${csvError.message}]`;
+        } catch (csvError: unknown) {
+            const errorMessage = csvError instanceof Error ? csvError.message : String(csvError);
+            console.error(`API Route: CSV Parsing Error for ${filePath}:`, errorMessage);
+            extractedContent = `[CSV parsing failed: ${errorMessage}]`;
         }
     } else if (['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif'].some(ext => lowerFilePath.endsWith(ext))) {
         console.log(`API Route: Image file found: ${filePath}. Attempting OCR with node-tesseract-ocr...`);
@@ -92,9 +94,10 @@ async function extractTextFromFileBuffer(buffer: Buffer, filePath: string): Prom
             if (extractedContent.length > 0) {
                 console.log(`API Route: OCR Sample: ${extractedContent.substring(0,100)}...`);
             }
-        } catch (ocrError: any) {
-            console.error(`API Route: node-tesseract-ocr Error for ${filePath}:`, ocrError.message ? ocrError.message : ocrError);
-            extractedContent = `[OCR processing failed (node-tesseract-ocr): ${ocrError.message ? ocrError.message : ocrError}]`;
+        } catch (ocrError: unknown) {
+            const errorMessage = ocrError instanceof Error ? ocrError.message : String(ocrError);
+            console.error(`API Route: node-tesseract-ocr Error for ${filePath}:`, errorMessage);
+            extractedContent = `[OCR processing failed (node-tesseract-ocr): ${errorMessage}]`;
         }
     } else {
         console.log(`API Route: Skipping unsupported file type: ${filePath}`);
@@ -249,7 +252,14 @@ export async function POST(req: NextRequest) {
     }
     
     console.log(`API Route: Attempting to update client ${clientId}.`);
-    const updatePayload: any = {
+    
+    interface UpdatePayload { // Defined interface for updatePayload
+        ai_document_notes: string;
+        ai_document_status?: string;
+        last_ai_analysis_at?: string;
+    }
+
+    const updatePayload: UpdatePayload = {
         ai_document_notes: finalNotesToSave
     };
     if (finalStatusToSave !== undefined) { // Only update status if it was part of this analysis type
@@ -287,8 +297,9 @@ export async function POST(req: NextRequest) {
         } 
     });
 
-  } catch (error: any) {
-    console.error('API Route: Critical Error:', error.message);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) { // Changed any to unknown
+    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+    console.error('API Route: Critical Error:', errorMessage);
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 } 
