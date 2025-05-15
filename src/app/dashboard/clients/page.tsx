@@ -301,7 +301,7 @@ interface RawClientFromDB {
   recent_files?: string | string[] | null;
   last_interaction_notes?: string | null;
   custom_alerts?: string | { missedReminders: boolean; documentOverdue: boolean; } | null;
-  automated_emails?: boolean | null;
+  automatedEmails?: boolean | null;
   last_year_turnover?: number | null;
   profit_loss?: number | null;
   tax_owed?: number | null;
@@ -378,7 +378,7 @@ const mapClientData = (clientsData: RawClientFromDB[], tasksData: ClientTask[]):
       recentFiles: client.recent_files ? (typeof client.recent_files === 'string' ? JSON.parse(client.recent_files) : client.recent_files) : [],
       lastInteractionNotes: client.last_interaction_notes || '',
       customAlerts: parsedCustomAlerts,
-      automatedEmails: client.automated_emails ?? true, // Handle null/undefined, default to true
+      automatedEmails: client.automatedEmails ?? true, // Handle null/undefined, default to true
       lastYearTurnover: client.last_year_turnover || 0,
       profitLoss: client.profit_loss || 0,
       taxOwed: client.tax_owed || 0,
@@ -781,7 +781,7 @@ export default function ClientsPage() {
       recent_files: formData.recentFiles,
       last_interaction_notes: formData.lastInteractionNotes,
       custom_alerts: JSON.stringify(formData.customAlerts),
-      automated_emails: formData.automatedEmails,
+      automatedEmails: formData.automatedEmails,
       last_year_turnover: formData.lastYearTurnover || 0,
       profit_loss: formData.profitLoss,
       tax_owed: formData.taxOwed,
@@ -929,7 +929,7 @@ export default function ClientsPage() {
               recent_files: JSON.stringify(companyDetails.recentFiles || []),
               last_interaction_notes: companyDetails.lastInteractionNotes || '',
               custom_alerts: JSON.stringify(companyDetails.customAlerts || { missedReminders: false, documentOverdue: false }),
-              automated_emails: companyDetails.automatedEmails || false,
+              automatedEmails: companyDetails.automatedEmails || false,
               last_year_turnover: companyDetails.lastYearTurnover || 0,
               profit_loss: companyDetails.profitLoss || 0,
               tax_owed: companyDetails.taxOwed || 0,
@@ -1794,9 +1794,8 @@ export default function ClientsPage() {
                             <Label className="text-gray-900 font-medium">Automations</Label>
                             <div className="grid grid-cols-2 gap-4">
                               <div className="space-y-2">
-                                <Label className="text-sm text-gray-600">Standard Alerts</Label> {/* Changed label */} 
+                                <Label className="text-sm text-gray-600">Standard Alerts</Label>
                                 <div className="space-y-2">
-                                  {/* REMOVE_START */}
                                   <div className="flex items-center space-x-2">
                                     <Switch
                                       id="missedReminders"

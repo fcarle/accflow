@@ -530,7 +530,7 @@ export default function ClientDetailPage() {
         lastInteractionNotes: clientData.last_interaction_notes || '',
         reminderSchedule: clientData.reminder_schedule ? (typeof clientData.reminder_schedule === 'string' ? JSON.parse(clientData.reminder_schedule) : clientData.reminder_schedule) : { vatReminderDays: 30, accountsReminderDays: 30, confirmationStatementReminderDays: 30 },
         customAlerts: clientData.custom_alerts ? (typeof clientData.custom_alerts === 'string' ? JSON.parse(clientData.custom_alerts) : clientData.custom_alerts) : { missedReminders: false, documentOverdue: false },
-        automatedEmails: clientData.automated_emails === true,
+        automatedEmails: clientData.automatedEmails === true,
         lastYearTurnover: clientData.last_year_turnover || 0,
         profitLoss: clientData.profit_loss || 0,
         taxOwed: clientData.tax_owed || 0,
