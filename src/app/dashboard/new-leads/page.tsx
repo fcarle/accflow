@@ -106,6 +106,7 @@ export default function NewLeadsPage() {
   const [errorClientNumbers, setErrorClientNumbers] = useState<string | null>(null);
 
   const [cityFilter, setCityFilter] = useState<string>('');
+  const [postTownOptions, setPostTownOptions] = useState<string[]>([]);
 
   const fetchClientCompanyNumbers = useCallback(async () => {
     setLoadingClientNumbers(true);
@@ -154,6 +155,37 @@ export default function NewLeadsPage() {
   useEffect(() => {
     fetchSavedSearches();
     fetchClientCompanyNumbers();
+
+    const fetchPostTowns = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('companies_house_data')
+          .select('reg_address_post_town');
+
+        if (error) {
+          console.error('Error fetching post towns:', error);
+          // Optionally set an error state here
+          return;
+        }
+
+        if (data) {
+          const uniquePostTowns = Array.from(
+            new Set(
+              data
+                .map(item => item.reg_address_post_town)
+                .filter(town => town !== null && town.trim() !== '')
+                .map(town => town!.toUpperCase()) // Standardize to uppercase
+            )
+          ).sort();
+          setPostTownOptions(uniquePostTowns);
+        }
+      } catch (e) {
+        console.error('Error processing post towns:', e);
+        // Optionally set an error state here
+      }
+    };
+
+    fetchPostTowns();
   }, [fetchSavedSearches, fetchClientCompanyNumbers]);
 
   const fetchListData = useCallback(async () => {
@@ -629,9 +661,15 @@ export default function NewLeadsPage() {
                   setCityFilter(e.target.value);
                   setCurrentPage(1);
                 }}
-                placeholder="e.g., London"
+                placeholder="e.g., London or type to filter"
                 className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                list="post-town-options"
              />
+             <datalist id="post-town-options">
+                {postTownOptions.map(town => (
+                  <option key={town} value={town} />
+                ))}
+             </datalist>
           </div>
           
           <div>
