@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 // import { MapContainer, TileLayer, Marker, Popup, FeatureGroup, useMapEvents } from 'react-leaflet';
 // import L, { LeafletEvent, GeoJSON } from 'leaflet'; 
 // import { EditControl } from 'react-leaflet-draw';
-// import { MarkerClusterGroup } // From dynamic import
+// import { MarkerClusterGroup } from dynamic import
 
 // Keep GeoJSON if saved searches of type 'map_area' are still being processed for filtering in list view
 import { GeoJSON } from 'leaflet'; 
@@ -31,7 +31,7 @@ import { point as turfPoint } from '@turf/helpers'; // To create turf points for
 //   shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
 // });
 
-type Tab = 'List' | 'Custom Save';
+type Tab = 'List' | 'Custom Save' | 'Marketing Growth';
 
 interface CompanyData {
   company_name: string | null;
@@ -107,6 +107,24 @@ export default function NewLeadsPage() {
 
   const [cityFilter, setCityFilter] = useState<string>('');
   const [postTownOptions, setPostTownOptions] = useState<string[]>([]);
+
+  // State for Marketing Growth Tab
+  const [currentCityInput, setCurrentCityInput] = useState<string>('');
+  const [selectedMarketingCities, setSelectedMarketingCities] = useState<string[]>([]);
+  // const [potentialMarketingLeads, setPotentialMarketingLeads] = useState<Pick<CompanyData, 'company_number'>[]>([]); // Store only necessary data
+  const [marketingLeadCount, setMarketingLeadCount] = useState<number>(0);
+  const [marketingLoading, setMarketingLoading] = useState<boolean>(false);
+  const [marketingError, setMarketingError] = useState<string | null>(null);
+  const [marketingProgressMessage, setMarketingProgressMessage] = useState<string>('');
+
+  // State for "Take Action" forms
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [directMailQuantity, setDirectMailQuantity] = useState<number>(1);
+  const DIRECT_MAIL_COST_PER_LETTER = 1.5;
+  const EMAIL_OUTREACH_COST_PER_EMAIL = 1.0;
+  const [googleSearchSelected, setGoogleSearchSelected] = useState<boolean>(false);
+  const [facebookInstagramAdsSelected, setFacebookInstagramAdsSelected] = useState<boolean>(false);
+  const [linkedinAdsSelected, setLinkedInAdsSelected] = useState<boolean>(false);
 
   const fetchClientCompanyNumbers = useCallback(async () => {
     setLoadingClientNumbers(true);
@@ -409,17 +427,36 @@ export default function NewLeadsPage() {
   ]);
 
   useEffect(() => {
-    if (activeTab === 'List' && selectedSavedSearchId) {
-       const pageToUse = currentPage -1;
-       const paginatedSlice = filteredLeadsRef.current.slice(pageToUse * ITEMS_PER_PAGE, (pageToUse + 1) * ITEMS_PER_PAGE);
-       setLeadCompanies(paginatedSlice);
-       // Update totalLeads when custom filter is active and page changes
-       setTotalLeads(filteredLeadsRef.current.length);
-    } else if (activeTab === 'List' && !selectedSavedSearchId) {
-      // When custom filter is cleared, fetchListData will be called by the other useEffect due to selectedSavedSearchId dependency change.
-      // It will reset totalLeads correctly.
+    if (activeTab === 'List') {
+      if (selectedSavedSearchId) {
+        // Client-side pagination for saved searches
+        const pageToUse = currentPage - 1;
+        // Ensure filteredLeadsRef.current is populated before slicing
+        // Also, consider if loading is false to prevent slicing stale/empty data during a fetch for the saved search
+        if (filteredLeadsRef.current && filteredLeadsRef.current.length > 0) {
+            const paginatedSlice = filteredLeadsRef.current.slice(pageToUse * ITEMS_PER_PAGE, (pageToUse + 1) * ITEMS_PER_PAGE);
+            setLeadCompanies(paginatedSlice);
+            // totalLeads for saved searches should already be set to filteredLeadsRef.current.length
+            // when fetchListData (for saved search) completes or selectedSavedSearchId changes.
+            // If not, it might need to be set here: setTotalLeads(filteredLeadsRef.current.length);
+        } else if (!loading) { 
+            setLeadCompanies([]);
+            // if filteredLeadsRef is empty and not loading, totalLeads should be 0
+            // setTotalLeads(0); // This should be handled by fetchListData or when selectedSavedSearchId changes
+        }
+      } else {
+        // Standard server-side pagination: fetch data for the current page
+        fetchListData();
+      }
     }
-  }, [currentPage, activeTab, selectedSavedSearchId, specificAccountsDueStartDate, specificAccountsDueEndDate, specificConfirmationStatementStartDate, specificConfirmationStatementEndDate, filteredLeadsRef]); 
+    // Dependencies:
+    // - currentPage: to react to page changes.
+    // - activeTab: to ensure this logic only runs for the 'List' tab.
+    // - selectedSavedSearchId: to differentiate between client-side and server-side pagination.
+    // - fetchListData: to ensure the effect re-runs if fetchListData itself changes due to its own dependencies (e.g., date filters),
+    //   and because it's called by this effect.
+    // - loading: to re-evaluate pagination if loading state changes (e.g. after a fetch for saved search completes)
+  }, [currentPage, activeTab, selectedSavedSearchId, fetchListData, loading]); 
 
   const totalPages = Math.ceil(totalLeads / ITEMS_PER_PAGE);
 
@@ -433,6 +470,21 @@ export default function NewLeadsPage() {
   
   const handleTabChange = (tab: Tab) => {
     setActiveTab(tab);
+    // Reset marketing tab specific states if navigating away or to it for a fresh start
+    if (tab !== 'Marketing Growth') {
+      setCurrentCityInput(''); 
+      setSelectedMarketingCities([]);
+      setMarketingLeadCount(0);
+      setMarketingError(null);
+      setMarketingLoading(false);
+      setMarketingProgressMessage('');
+      setActiveAction(null); // Reset active action when leaving tab
+      // Reset action form states as well
+      setDirectMailQuantity(1);
+      setGoogleSearchSelected(false);
+      setFacebookInstagramAdsSelected(false);
+      setLinkedInAdsSelected(false);
+    }
   };
 
   const handleSaveCustomSearch = async () => {
@@ -531,6 +583,245 @@ export default function NewLeadsPage() {
     }
   };
 
+  const handleAnalyzeOpportunities = async () => {
+    setMarketingLoading(true);
+    setMarketingError(null);
+    setMarketingLeadCount(0);
+    setMarketingProgressMessage('Analyzing market opportunities...');
+
+    if (selectedMarketingCities.length === 0) {
+      setMarketingError("Please select at least one city to analyze.");
+      setMarketingLoading(false);
+      setMarketingProgressMessage('');
+      return;
+    }
+
+    try {
+      const today = new Date();
+      const oneMonthLater = new Date();
+      oneMonthLater.setDate(today.getDate() + 30);
+      const queryStartDate = today.toISOString().split('T')[0];
+      const queryEndDate = oneMonthLater.toISOString().split('T')[0];
+
+      let queryBuilder = supabase
+        .from('companies_house_data')
+        .select('company_number') // Only fetch company_number for efficiency
+        .eq('company_status', 'Active')
+        .or(`and(accounts_next_due_date.gte.${queryStartDate},accounts_next_due_date.lte.${queryEndDate}),and(returns_next_due_date.gte.${queryStartDate},returns_next_due_date.lte.${queryEndDate})`);
+
+      // Build the OR condition for multiple cities
+      const cityFilters = selectedMarketingCities.map(city => `reg_address_post_town.ilike.%${city.trim()}%`).join(',');
+      queryBuilder = queryBuilder.or(cityFilters);
+
+      const { data: companies, error: dbError } = await queryBuilder;
+
+      if (dbError) {
+        console.error("Supabase dbError in marketing analysis:", dbError);
+        throw dbError;
+      }
+
+      if (companies && companies.length > 0) {
+        const leads = companies.filter(company => !clientCompanyNumbers.has(company.company_number));
+        setMarketingLeadCount(leads.length);
+        if (leads.length === 0) {
+             setMarketingError(`No new leads found in the selected cities with filings due in the next 30 days.`);
+        } else {
+             setMarketingError(null); // Clear previous errors
+        }
+      } else {
+        setMarketingLeadCount(0);
+        setMarketingError(`No companies found in the selected cities matching the initial criteria (active, specific due dates).`);
+      }
+
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      console.error("Error analyzing marketing opportunities:", errorMessage);
+      setMarketingError("Failed to analyze opportunities. " + errorMessage);
+      setMarketingLeadCount(0);
+    } finally {
+      setMarketingLoading(false);
+      setMarketingProgressMessage('');
+    }
+  };
+
+  const handleToActionClick = (actionType: string) => {
+    setActiveAction(actionType);
+    if (actionType === 'directMail') {
+      // Initialize directMailQuantity based on marketingLeadCount, ensuring it's at least 1 if leads are present
+      setDirectMailQuantity(marketingLeadCount > 0 ? Math.min(10, marketingLeadCount) : 1); // Default to 10 or max leads, min 1
+    }
+    // Reset other form-specific states if necessary when switching actions
+  };
+
+  const handleAddCity = () => {
+    const cityToAdd = currentCityInput.trim().toUpperCase(); // Standardize to uppercase like postTownOptions
+    if (cityToAdd && !selectedMarketingCities.includes(cityToAdd) && postTownOptions.includes(cityToAdd)) {
+      setSelectedMarketingCities([...selectedMarketingCities, cityToAdd]);
+      setCurrentCityInput('');
+    } else if (cityToAdd && !postTownOptions.includes(cityToAdd)) {
+      // Optional: alert user if city not in known list, or allow adding anyway
+      alert("City not found in the suggestion list. Please select a valid city from the suggestions.");
+    } else if (cityToAdd && selectedMarketingCities.includes(cityToAdd)) {
+      alert("City already selected.");
+    }
+  };
+
+  const handleRemoveCity = (cityToRemove: string) => {
+    setSelectedMarketingCities(selectedMarketingCities.filter(city => city !== cityToRemove));
+  };
+
+  const renderTakeActionForms = () => {
+    if (!activeAction) return null;
+
+    const costToShow = (cost: number) => cost.toFixed(2);
+    const roundToWhole = (num: number) => Math.round(num);
+
+    // Define strategy options here to make JSX cleaner
+    const displayCitiesString = selectedMarketingCities.length > 0 ? selectedMarketingCities.join(', ') : 'your target area';
+    const strategyOptions = [
+      { id: 'googleSearchAds', checked: googleSearchSelected, setter: setGoogleSearchSelected, title: 'Google Search Ads', description: `Boost visibility when clients in "${displayCitiesString}" search on Google.` },
+      { id: 'socialMediaAds', checked: facebookInstagramAdsSelected, setter: setFacebookInstagramAdsSelected, title: 'Facebook & Instagram Ads', description: `Target individuals and businesses on social media in the "${displayCitiesString}" area.` },
+      { id: 'linkedinAds', checked: linkedinAdsSelected, setter: setLinkedInAdsSelected, title: 'LinkedIn Ads', description: `Reach professionals and companies in "${displayCitiesString}" on LinkedIn.` },
+    ];
+
+    return (
+      <div className="mt-6 p-6 bg-white border border-gray-200 rounded-xl shadow-lg">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-semibold text-indigo-700">
+            {activeAction === 'directMail' && 'Direct Mail Campaign Setup'}
+            {activeAction === 'emailOutreach' && 'Email Outreach Setup'}
+            {activeAction === 'personalizedStrategy' && 'Personalized Strategy Options'}
+          </h3>
+          <button 
+            onClick={() => setActiveAction(null)} 
+            className="px-3 py-1 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 hover:text-gray-800 transition-colors"
+          >
+            &larr; Back
+          </button>
+        </div>
+
+        {activeAction === 'directMail' && (
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="directMailQuantitySlider" className="block text-sm font-medium text-gray-700 mb-1">
+                Number of letters to send: <span className="font-bold text-indigo-600 text-base">{directMailQuantity.toLocaleString()}</span> (max: {marketingLeadCount.toLocaleString()})
+              </label>
+              <input 
+                type="range" 
+                id="directMailQuantitySlider"
+                value={directMailQuantity}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  if (val >= 1 && val <= marketingLeadCount) {
+                    setDirectMailQuantity(val);
+                  } else if (val > marketingLeadCount && marketingLeadCount > 0) {
+                    setDirectMailQuantity(marketingLeadCount);
+                  } else {
+                    setDirectMailQuantity(1);
+                  }
+                }}
+                min="1"
+                max={marketingLeadCount > 0 ? marketingLeadCount : 1}
+                className="w-full h-3 bg-gray-300 rounded-lg appearance-none cursor-pointer mt-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed thumb:bg-indigo-600"
+                disabled={marketingLeadCount === 0}
+              />
+            </div>
+            <div className="p-4 bg-indigo-50 rounded-lg space-y-2">
+              <p className="text-sm text-indigo-800"><span className="font-semibold">Cost per letter:</span> £{costToShow(DIRECT_MAIL_COST_PER_LETTER)}</p>
+              <p className="text-lg font-bold text-indigo-900">
+                Total Estimated Cost: £{costToShow(directMailQuantity * DIRECT_MAIL_COST_PER_LETTER)}
+              </p>
+            </div>
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <p className="text-sm text-gray-600 mb-1">
+                Industry average response rates for direct mail can be 2-9%. Assuming ~7% for projection:
+              </p>
+              <p className="text-md font-semibold text-gray-800">
+                Estimated Responses: <span className="text-green-600">{roundToWhole(directMailQuantity * 0.07)}</span>
+              </p>
+            </div>
+            <button 
+              className="w-full px-4 py-2.5 mt-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-60 transition-colors"
+              disabled={marketingLeadCount === 0 || directMailQuantity < 1}
+              onClick={() => alert(`Proceeding with Direct Mail for ${directMailQuantity} letters. (Integration needed)`)}
+            >
+              Confirm Campaign (Cost: £{costToShow(directMailQuantity * DIRECT_MAIL_COST_PER_LETTER)})
+            </button>
+          </div>
+        )}
+
+        {activeAction === 'emailOutreach' && (
+          <div className="space-y-5">
+            <div className="p-5 bg-indigo-50 rounded-xl shadow">
+              <div className="mb-3">
+                <p className="text-sm text-indigo-700 font-medium">Potential leads identified:</p>
+                <p className="text-2xl font-bold text-indigo-900">{marketingLeadCount.toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-indigo-700 font-medium">Est. Total Cost for Email Contacts:</p>
+                <p className="text-2xl font-bold text-indigo-900">£{costToShow(marketingLeadCount * EMAIL_OUTREACH_COST_PER_EMAIL)}</p>
+                <p className="text-xs text-indigo-600 mt-1">(Based on £{costToShow(EMAIL_OUTREACH_COST_PER_EMAIL)} per email contact)</p>
+              </div>
+            </div>
+
+            <div className="p-5 bg-gray-50 rounded-xl shadow">
+              <p className="text-sm text-gray-700 font-medium mb-1">Performance Projection:</p>
+              <p className="text-md font-semibold text-gray-800">
+                Estimated Responses (at 5%): <span className="text-2xl font-bold text-green-600">{roundToWhole(marketingLeadCount * 0.05)}</span>
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                Email campaign response rates can vary significantly (often 1-5%). Actual responses depend on email quality, offer, and precise targeting.
+              </p>
+            </div>
+
+            <p className="text-xs text-gray-600 py-2 px-1 text-center">
+              Note: This provides an estimated cost to attempt to acquire email contacts. Actual number of emails found and final cost may vary.
+            </p>
+
+            <button 
+              className="w-full px-4 py-3 mt-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-60 transition-colors text-base"
+              disabled={marketingLeadCount === 0}
+              onClick={() => alert(`Requesting email list for ${marketingLeadCount} contacts. (Integration needed)`)}
+            >
+              Attempt to Acquire Email Contacts (Est. Cost: £{costToShow(marketingLeadCount * EMAIL_OUTREACH_COST_PER_EMAIL)})
+            </button>
+          </div>
+        )}
+
+        {activeAction === 'personalizedStrategy' && (
+          <div className="space-y-5">
+            <p className="text-sm text-gray-600 mb-3">
+              Select the digital strategies you&apos;re interested in exploring. Our growth team will then contact you for a personalized consultation.
+            </p>
+            {strategyOptions.map(strategy => (
+              <div key={strategy.id} className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <div className="flex items-start">
+                  <input 
+                    id={strategy.id} type="checkbox" className="h-5 w-5 text-indigo-600 border-gray-300 rounded mt-1 focus:ring-indigo-500 cursor-pointer"
+                    checked={strategy.checked} onChange={(e) => strategy.setter(e.target.checked)} 
+                  />
+                  <div className="ml-3 flex-grow">
+                    <label htmlFor={strategy.id} className="font-semibold text-gray-800 cursor-pointer">{strategy.title}</label>
+                    <p className="text-sm text-gray-600 mt-0.5">
+                      {strategy.description}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button 
+              className="w-full px-4 py-2.5 mt-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-60 transition-colors"
+              onClick={() => alert(`Requesting consultation for selected strategies. (Integration needed)`)}
+              disabled={!googleSearchSelected && !facebookInstagramAdsSelected && !linkedinAdsSelected}
+            >
+              Request Consultation
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (loadingClientNumbers && activeTab !== 'Custom Save') {
       return <div className="container mx-auto p-4 text-center">Loading client data...</div>;
   }
@@ -549,7 +840,7 @@ export default function NewLeadsPage() {
 
       <div className="mb-6 bg-white rounded-xl shadow-sm">
         <nav className="flex" aria-label="Tabs">
-          {['List', 'Custom Save'].map((tabName) => (
+          {['List', 'Custom Save', 'Marketing Growth'].map((tabName) => (
             <button
               key={tabName}
               onClick={() => handleTabChange(tabName as Tab)}
@@ -903,6 +1194,139 @@ export default function NewLeadsPage() {
               )}
             </div>
           </div>
+        )}
+
+        {activeTab === 'Marketing Growth' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl shadow-sm p-6">
+              <h2 className="text-xl font-semibold mb-4 text-gray-800">Analyze Local Market Opportunities</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Select one or more cities to discover active companies that have filings due within the next 30 days and are not yet your clients in Accflow.
+              </p>
+              
+              <div className="mb-6">
+                <label htmlFor="marketing-city-input" className="block text-sm font-medium text-gray-700 mb-1">Add City</label>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="text" 
+                    id="marketing-city-input"
+                    value={currentCityInput}
+                    onChange={(e) => setCurrentCityInput(e.target.value.toUpperCase())} // Standardize input to uppercase
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCity(); }}}
+                    className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                    placeholder="e.g., London, Manchester"
+                    disabled={marketingLoading}
+                    list="post-town-options-marketing"
+                  />
+                  <button 
+                    onClick={handleAddCity} 
+                    className="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+                    disabled={marketingLoading || !currentCityInput.trim() || !postTownOptions.includes(currentCityInput.trim().toUpperCase())}
+                  >
+                    Add
+                  </button>
+                </div>
+                <datalist id="post-town-options-marketing">
+                  {postTownOptions
+                    .filter(town => !selectedMarketingCities.includes(town))
+                    .map(town => (
+                      <option key={town} value={town} />
+                  ))}
+                </datalist>
+
+                {selectedMarketingCities.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <h4 className="text-xs font-medium text-gray-500 uppercase">Selected Cities:</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedMarketingCities.map(city => (
+                        <div key={city} className="flex items-center bg-indigo-100 text-indigo-700 text-sm font-medium px-3 py-1 rounded-full">
+                          <span>{city}</span>
+                          <button 
+                            onClick={() => handleRemoveCity(city)} 
+                            className="ml-2 text-indigo-500 hover:text-indigo-700 focus:outline-none"
+                            disabled={marketingLoading}
+                            aria-label={`Remove ${city}`}
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-end">
+                  <button 
+                    onClick={handleAnalyzeOpportunities}
+                    disabled={marketingLoading || selectedMarketingCities.length === 0}
+                    className="w-full px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {marketingLoading ? (
+                      <div className="flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white mr-2"></div>
+                        {marketingProgressMessage || 'Analyzing...'}
+                      </div>
+                    ) : 'Analyze Opportunities'}
+                  </button>
+                </div>
+              </div>
+
+              {marketingError && (
+                <div className="p-4 mb-4 bg-red-50 text-red-700 rounded-lg">{marketingError}</div>
+              )}
+
+              {/* Show results and action items only on successful analysis with leads */}
+              {!marketingLoading && !marketingError && marketingLeadCount > 0 && (
+                <>
+                  <div className="p-6 mb-6 bg-green-50 border border-green-200 rounded-lg">
+                    <h3 className="text-2xl font-semibold text-green-700">
+                      {marketingLeadCount === 1000 ? 'Over 1,000' : marketingLeadCount.toLocaleString()} potential new clients found!
+                    </h3>
+                    <p className="text-green-600 mt-1">
+                      These are active companies in &quot;{selectedMarketingCities.join(', ')}&quot; with filings due in the next 30 days, which are not currently in your Accflow client list.
+                      {marketingLeadCount === 1000 ? ' (The actual number could be higher.)' : ''}
+                    </p>
+                  </div>
+                
+                  {/* Main "Take Action" Buttons or The Active Form */} 
+                  {activeAction ? renderTakeActionForms() : (
+                    <div className="mt-8">
+                        <h3 className="text-lg font-semibold text-gray-800 mb-3">Take Action:</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <button
+                                onClick={() => handleToActionClick('directMail')}
+                                className="p-4 border rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors text-left disabled:opacity-50"
+                                disabled={marketingLeadCount === 0}
+                            >
+                                <h4 className="font-medium text-gray-700 mb-2">Direct Mail Campaign</h4>
+                                <p className="text-sm text-gray-600 mb-3">Reach out via traditional post.</p>
+                                <span className="text-sm text-indigo-600 font-medium">Configure &rarr;</span>
+                            </button>
+                            <button
+                                onClick={() => handleToActionClick('emailOutreach')}
+                                className="p-4 border rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors text-left disabled:opacity-50"
+                                disabled={marketingLeadCount === 0} 
+                            >
+                                <h4 className="font-medium text-gray-700 mb-2">Email Outreach</h4>
+                                <p className="text-sm text-gray-600 mb-3">Consider an email campaign.</p>
+                                <span className="text-sm text-indigo-600 font-medium">Explore &rarr;</span>
+                            </button>
+                            <button
+                                onClick={() => handleToActionClick('personalizedStrategy')}
+                                className="p-4 border rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+                            >
+                                <h4 className="font-medium text-gray-700 mb-2">Personalized Strategy</h4>
+                                <p className="text-sm text-gray-600 mb-3">Want help crafting the perfect approach?</p>
+                                <span className="text-sm text-indigo-600 font-medium">Select Options &rarr;</span>
+                            </button>
+                        </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+         
         )}
       </div>
     </div>
