@@ -70,6 +70,11 @@ const TasksPage = () => {
   const [clients, setClients] = useState<Client[]>([]); // Will hold clients created by the current user
   const [profiles, setProfiles] = useState<Profile[]>([]); // Still needed for 'assigned_user_id' dropdown
   const [isCreatingAlertForTaskId, setIsCreatingAlertForTaskId] = useState<string | null>(null); // For button loading state
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   const fetchTasksAndRelatedData = async () => {
     setLoading(true);
@@ -407,6 +412,17 @@ const TasksPage = () => {
         <p className="mt-2 text-sm text-gray-500">
           Please check your RLS policies and network connection.
         </p>
+      </div>
+    );
+  }
+
+  if (!isClient) {
+    // You can return a loader here if you prefer, or null to render nothing until client-side mount.
+    // For a Kanban board, showing a loader until dnd is ready is often better.
+    return (
+      <div className="p-8 text-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary mx-auto mb-4"></div>
+        <p className="text-gray-600">Initializing board...</p>
       </div>
     );
   }
