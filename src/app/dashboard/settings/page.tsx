@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Save, Info, Loader2, AlertTriangle } from 'lucide-react';
 import TiptapEditor from './TiptapEditor';
+import { Checkbox } from "@/components/ui/checkbox"; // Added for services
 
 interface Profile {
   id: string;
@@ -20,6 +21,8 @@ interface Profile {
   role: string;
   accountancy_name: string;
   created_at: string;
+  location?: string; // Added location
+  services_offered?: string[]; // Added services_offered
 }
 
 // Interface for Alert Templates
@@ -51,6 +54,31 @@ const getTemplateDescription = (alertType: string): string => {
   }
 };
 
+// Define the list of accountancy services
+const ukAccountancyServices = [
+  // Core Accounting & Tax
+  "Annual Accounts Preparation",
+  "Self Assessment Tax Returns",
+  "Corporation Tax",
+  "VAT Returns & Advice",
+  "Bookkeeping",
+  "Payroll Services",
+  "Company Secretarial",
+  // Specialist & Advisory
+  "Management Accounts & Reporting",
+  "Business Startup & Formation",
+  "Business Planning & Forecasting",
+  "Capital Gains Tax",
+  "Inheritance Tax Planning",
+  "Research & Development (R&D) Tax Credits",
+  "Making Tax Digital (MTD) Compliance",
+  "Audit & Assurance",
+  "Forensic Accounting",
+  "Insolvency & Restructuring",
+  "Cloud Accounting Software Advice", // e.g., Xero, QuickBooks, Sage
+  "HMRC Investigations Support"
+];
+
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,12 +86,15 @@ export default function SettingsPage() {
   const [formData, setFormData] = useState({
     email: '',
     company_name: '',
-    accountancy_name: ''
+    accountancy_name: '',
+    location: '', // Added location
+    services_offered: [] as string[] // Added services_offered
   });
   const [formErrors, setFormErrors] = useState({
     email: '',
     company_name: '',
-    accountancy_name: ''
+    accountancy_name: '',
+    location: '' // Added location error field
   });
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -98,7 +129,9 @@ export default function SettingsPage() {
         setFormData({
           email: data.email || '',
           company_name: data.company_name || '',
-          accountancy_name: data.accountancy_name || ''
+          accountancy_name: data.accountancy_name || '',
+          location: data.location || '', // Initialize location
+          services_offered: data.services_offered || [] // Initialize services_offered
         });
       } catch (error) {
         console.error('Error:', error);
@@ -157,7 +190,8 @@ export default function SettingsPage() {
     const errors = {
       email: '',
       company_name: '',
-      accountancy_name: ''
+      accountancy_name: '',
+      location: '' // Initialize location error
     };
 
     // Email validation
@@ -168,6 +202,12 @@ export default function SettingsPage() {
       errors.email = 'Email address is invalid';
       isValid = false;
     }
+
+    // Basic validation for location (optional)
+    // if (!formData.location) {
+    //   errors.location = 'Location is required';
+    //   isValid = false;
+    // }
 
     setFormErrors(errors);
     return isValid;
@@ -189,6 +229,20 @@ export default function SettingsPage() {
     }
   };
 
+  const handleServiceChange = (service: string, checked: boolean) => {
+    setFormData(prev => {
+      const currentServices = prev.services_offered || [];
+      if (checked) {
+        if (!currentServices.includes(service)) {
+          return { ...prev, services_offered: [...currentServices, service] };
+        }
+      } else {
+        return { ...prev, services_offered: currentServices.filter(s => s !== service) };
+      }
+      return prev;
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -201,9 +255,11 @@ export default function SettingsPage() {
       const { error } = await supabase
         .from('profiles')
         .update({
-          email: formData.email,
           company_name: formData.company_name,
-          accountancy_name: formData.accountancy_name
+          accountancy_name: formData.accountancy_name,
+          // email: formData.email, // Typically email updates are handled separately due to verification
+          location: formData.location, // Add location to update
+          services_offered: formData.services_offered // Add services_offered to update
         })
         .eq('id', profile.id);
 
@@ -218,10 +274,12 @@ export default function SettingsPage() {
         ...profile,
         email: formData.email,
         company_name: formData.company_name,
-        accountancy_name: formData.accountancy_name
+        accountancy_name: formData.accountancy_name,
+        location: formData.location, // Update location
+        services_offered: formData.services_offered // Update services_offered
       });
 
-      toast.success('Profile updated successfully');
+      toast.success('Profile updated successfully!');
       
       // Also update the auth email if it was changed
       if (formData.email !== profile.email) {
@@ -237,8 +295,8 @@ export default function SettingsPage() {
         }
       }
     } catch (error) {
-      toast.error('An error occurred');
-      console.error('Error:', error);
+      console.error('Error updating profile:', error);
+      toast.error('Failed to update profile');
     } finally {
       setUpdating(false);
     }
@@ -433,7 +491,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
+    <div className="container mx-auto p-4">
       <h1 className="text-3xl font-bold text-gray-800 mb-6">Settings</h1>
       <Tabs defaultValue="profile" className="w-full">
         <TabsList className="mb-6 bg-gray-100 p-1 rounded-lg grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 gap-1 w-full md:w-auto">
@@ -454,92 +512,98 @@ export default function SettingsPage() {
         <TabsContent value="profile">
           <Card>
             <CardHeader>
-               <CardTitle>Profile Settings</CardTitle>
-               <CardDescription>
-          Update your profile information and account preferences
-               </CardDescription>
+              <CardTitle>User Profile</CardTitle>
+              <CardDescription>Manage your account details, location, and services offered.</CardDescription>
             </CardHeader>
             <CardContent>
-        <form onSubmit={handleSubmit}>
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-              <div className="space-y-2">
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div>
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
                   name="email"
                   type="email"
-                  placeholder="Your email address"
                   value={formData.email}
                   onChange={handleChange}
-                  required
-                  className={formErrors.email ? "border-red-500" : ""}
+                    disabled // Email is usually not changed here or requires verification
+                    className="mt-1"
                 />
-                {formErrors.email && (
-                  <p className="text-red-500 text-sm mt-1">{formErrors.email}</p>
-                )}
+                  {formErrors.email && <p className="text-red-500 text-sm mt-1">{formErrors.email}</p>}
               </div>
-              <div className="space-y-2">
+                <div>
                 <Label htmlFor="company_name">Company Name</Label>
                 <Input
                   id="company_name"
                   name="company_name"
-                  placeholder="Your company name"
                   value={formData.company_name}
                   onChange={handleChange}
+                    className="mt-1"
                 />
+                   {formErrors.company_name && <p className="text-red-500 text-sm mt-1">{formErrors.company_name}</p>}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="accountancy_name">Accountancy Name</Label>
+                <div>
+                  <Label htmlFor="accountancy_name">Accountancy Name (if applicable)</Label>
                 <Input
                   id="accountancy_name"
                   name="accountancy_name"
-                  placeholder="Your accountancy name"
                   value={formData.accountancy_name}
                   onChange={handleChange}
+                    className="mt-1"
                 />
-              </div>
-              {profile && (
-                <div className="space-y-2">
-                  <Label>Account Created</Label>
-                  <div className="text-sm text-gray-500 pt-2">
-                    {new Date(profile.created_at).toLocaleDateString()}
-                  </div>
+                  {formErrors.accountancy_name && <p className="text-red-500 text-sm mt-1">{formErrors.accountancy_name}</p>}
                 </div>
-              )}
+
+                {/* Added Location Field */}
+                <div>
+                  <Label htmlFor="location">Location / Address</Label>
+                  <Input
+                    id="location"
+                    name="location"
+                    value={formData.location}
+                    onChange={handleChange}
+                    placeholder="e.g., 123 Main St, London, UK"
+                    className="mt-1"
+                  />
+                  {formErrors.location && <p className="text-red-500 text-sm mt-1">{formErrors.location}</p>}
+                </div>
+
+                {/* Added Services Offered Checkboxes */}
+                <div>
+                  <Label className="mb-2 block">Services Offered</Label>
+                  <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-3 p-4 border rounded-md max-h-72 overflow-y-auto">
+                    {ukAccountancyServices.map((service, index) => (
+                      <div key={index} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`service-${index}`}
+                          checked={(formData.services_offered || []).includes(service)}
+                          onCheckedChange={(checkedState) => {
+                            const isChecked = checkedState === true;
+                            handleServiceChange(service, isChecked);
+                          }}
+                        />
+                        <Label htmlFor={`service-${index}`} className="font-normal text-sm cursor-pointer">
+                          {service}
+                        </Label>
+              </div>
+                    ))}
+                  </div>
             </div>
 
-            <div className="pt-4 flex flex-col sm:flex-row gap-4 items-center">
-              <Button 
-                type="submit" 
-                className="w-full sm:w-auto"
-                disabled={updating}
-              >
-                {updating ? (
-                         <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Updating...</>
-                ) : 'Save Changes'}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0 sm:space-x-4 pt-4">
+                    <Button type="submit" disabled={updating} className="w-full sm:w-auto">
+                    {updating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                    Save Changes
               </Button>
               <Button 
                 type="button"
-                variant="outline" 
+                        variant="destructive"
+                        onClick={() => setDeleteDialogOpen(true)}
+                        disabled={deleteLoading}
                 className="w-full sm:w-auto"
-                onClick={() => {
-                    setFormData({
-                           email: '',
-                           company_name: '',
-                           accountancy_name: ''
-                    });
-                    setFormErrors({
-                      email: '',
-                      company_name: '',
-                      accountancy_name: ''
-                    });
-                }}
-                disabled={updating}
-              >
-                Reset
+                    >
+                        {deleteLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <AlertTriangle className="mr-2 h-4 w-4" />}
+                        Delete Account
               </Button>
-            </div>
           </div>
         </form>
             </CardContent>
@@ -669,9 +733,6 @@ export default function SettingsPage() {
             <DialogDescription>
               Are you sure you want to delete your account? This action cannot be undone.
             </DialogDescription>
-            <p className="mt-2 text-sm text-muted-foreground font-medium">
-              All your clients will be moved back to the new leads map for other accountants to find.
-            </p>
           </DialogHeader>
           <DialogFooter className="flex flex-col sm:flex-row gap-2 mt-4">
             <Button 

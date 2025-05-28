@@ -83,6 +83,9 @@ export default function HomePage() {
               <Image src="/logo.png" alt="AccFlow Logo" width={140} height={35} priority />
             </Link>
             <div className="space-x-3 sm:space-x-4 flex items-center">
+              {/* <Link href="/find-accountant" className="text-primary hover:text-primary/80 font-medium px-3 py-2 rounded-md text-sm sm:text-base transition-colors">
+                Find Accountant
+              </Link> */}
               {loadingAuth ? (
                 <div className="h-8 w-24 bg-gray-200 animate-pulse rounded-md"></div> // Basic loader
               ) : user ? (
