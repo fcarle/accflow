@@ -105,9 +105,12 @@ export default function HomePage() {
                   <Link href="/login" className="text-primary hover:text-primary/80 font-medium px-3 py-2 rounded-md text-sm sm:text-base transition-colors">
                     Login
                   </Link>
-                  <Link href="/signup" className="bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90 font-semibold text-sm sm:text-base shadow-md hover:shadow-lg transition-all">
-                    Sign Up
-                  </Link>
+                  <button
+                    onClick={() => setIsModalOpen(true)}
+                    className="bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90 font-semibold text-sm sm:text-base shadow-md hover:shadow-lg transition-all"
+                  >
+                    Book a Demo
+                  </button>
                 </>
               )}
             </div>
@@ -127,16 +130,10 @@ export default function HomePage() {
           <p className="text-lg md:text-xl text-gray-600 mb-10 max-w-3xl mx-auto">
             AccFlow is your all-in-one platform for accountants. Streamline client workflows, automate critical deadlines, and discover a consistent stream of new business opportunities.
           </p>
-          <div className="flex flex-col sm:flex-row justify-center items-center gap-4 sm:gap-6">
-            <Link 
-              href="/signup" 
-              className="bg-primary text-white px-8 py-4 rounded-lg font-semibold text-lg hover:bg-primary/90 transition duration-300 shadow-xl hover:shadow-primary/40 transform hover:scale-105 w-full sm:w-auto"
-            >
-              Sign Up
-            </Link>
+          <div className="flex justify-center items-center gap-4 sm:gap-6">
             <button
               onClick={() => setIsModalOpen(true)}
-              className="bg-transparent text-primary border-2 border-primary px-8 py-4 rounded-lg font-semibold text-lg hover:bg-primary/10 transition duration-300 transform hover:scale-105 w-full sm:w-auto"
+              className="bg-primary text-white px-8 py-4 rounded-lg font-semibold text-lg hover:bg-primary/90 transition duration-300 shadow-xl hover:shadow-primary/40 transform hover:scale-105 w-full sm:w-auto"
             >
               Book a Demo
             </button>
@@ -180,9 +177,9 @@ export default function HomePage() {
               <p className="text-gray-600 mb-6 text-lg">
                 Our intelligent system automatically excludes your existing AccFlow clients, so you can focus on new opportunities with confidence.
               </p>
-              <Link href="/signup" className="bg-primary text-white px-6 py-3 rounded-lg font-semibold text-lg hover:bg-primary/90 transition duration-300 inline-flex items-center group">
-                Start Finding Leads <span className="material-icons ml-2 transition-transform duration-200 group-hover:translate-x-1">arrow_forward</span>
-              </Link>
+              <button onClick={() => setIsModalOpen(true)} className="bg-primary text-white px-6 py-3 rounded-lg font-semibold text-lg hover:bg-primary/90 transition duration-300 inline-flex items-center group">
+                Book a Demo <span className="material-icons ml-2 transition-transform duration-200 group-hover:translate-x-1">arrow_forward</span>
+              </button>
             </div>
             <div className="order-1 md:order-2 flex justify-center">
               {/* Mock UI for Lead Generation */}
